@@ -1,6 +1,6 @@
 # Senna Chat API
 
-Standalone chat and action-draft service for Senna, the Stage0 assistant.
+This is a standalone chat and action-draft service for Senna, the Stage0 assistant.
 
 Senna is scoped to Stage0, RISE, RISE Testnet, EVM wallets, launchpad usage, NFT drops, token creation, token locks, airdrops/multisend, domains, dashboards, and public on-chain verification.
 
