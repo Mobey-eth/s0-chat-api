@@ -348,6 +348,320 @@ export async function takeRateLimit(input: {
   };
 }
 
+export interface ProjectImageMapping {
+  imageUrl?: string;
+  imageMimeType?: string;
+  imageSizeBytes?: number;
+  uploadedAt: string;
+  description?: string;
+  websiteUrl?: string;
+  xUrl?: string;
+  telegramUrl?: string;
+  discordUrl?: string;
+}
+
+export interface StoredImageAsset {
+  imageData: Buffer;
+  imageMimeType: string;
+  imageSizeBytes: number;
+}
+
+export async function upsertCollectionImage(input: {
+  id: string;
+  chainId: number;
+  collectionAddress: string;
+  imageUrl?: string;
+  imageMimeType?: string;
+  imageSizeBytes?: number;
+  imageData?: Buffer;
+  description?: string | null;
+  websiteUrl?: string | null;
+  xUrl?: string | null;
+  telegramUrl?: string | null;
+  discordUrl?: string | null;
+}): Promise<ProjectImageMapping> {
+  const result = await pool.query<{
+    image_url: string | null;
+    image_mime_type: string | null;
+    image_size_bytes: number | null;
+    uploaded_at: string;
+    description: string | null;
+    website_url: string | null;
+    x_url: string | null;
+    telegram_url: string | null;
+    discord_url: string | null;
+  }>(
+    `
+      insert into senna.collection_images (
+        id,
+        chain_id,
+        collection_address,
+        image_url,
+        image_mime_type,
+        image_size_bytes,
+        image_data,
+        description,
+        website_url,
+        x_url,
+        telegram_url,
+        discord_url
+      )
+      values ($1, $2, lower($3), $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      on conflict (chain_id, collection_address)
+      do update set
+        id = case when excluded.image_data is not null then excluded.id else senna.collection_images.id end,
+        image_url = coalesce(excluded.image_url, senna.collection_images.image_url),
+        image_mime_type = coalesce(excluded.image_mime_type, senna.collection_images.image_mime_type),
+        image_size_bytes = coalesce(excluded.image_size_bytes, senna.collection_images.image_size_bytes),
+        image_data = coalesce(excluded.image_data, senna.collection_images.image_data),
+        description = excluded.description,
+        website_url = excluded.website_url,
+        x_url = excluded.x_url,
+        telegram_url = excluded.telegram_url,
+        discord_url = excluded.discord_url,
+        uploaded_at = case when excluded.image_data is not null then now() else senna.collection_images.uploaded_at end,
+        updated_at = now()
+      returning image_url, image_mime_type, image_size_bytes, uploaded_at, description, website_url, x_url, telegram_url, discord_url
+    `,
+    [
+      input.id,
+      input.chainId,
+      input.collectionAddress,
+      input.imageUrl ?? null,
+      input.imageMimeType ?? null,
+      input.imageSizeBytes ?? null,
+      input.imageData ?? null,
+      input.description ?? null,
+      input.websiteUrl ?? null,
+      input.xUrl ?? null,
+      input.telegramUrl ?? null,
+      input.discordUrl ?? null,
+    ],
+  );
+
+  const row = result.rows[0];
+  return {
+    imageUrl: row.image_url ?? undefined,
+    imageMimeType: row.image_mime_type ?? undefined,
+    imageSizeBytes: row.image_size_bytes ?? undefined,
+    uploadedAt: row.uploaded_at,
+    description: row.description ?? undefined,
+    websiteUrl: row.website_url ?? undefined,
+    xUrl: row.x_url ?? undefined,
+    telegramUrl: row.telegram_url ?? undefined,
+    discordUrl: row.discord_url ?? undefined,
+  };
+}
+
+export async function upsertTokenImage(input: {
+  id: string;
+  chainId: number;
+  tokenAddress: string;
+  imageUrl?: string;
+  imageMimeType?: string;
+  imageSizeBytes?: number;
+  imageData?: Buffer;
+  description?: string | null;
+  websiteUrl?: string | null;
+  xUrl?: string | null;
+  telegramUrl?: string | null;
+  discordUrl?: string | null;
+}): Promise<ProjectImageMapping> {
+  const result = await pool.query<{
+    image_url: string | null;
+    image_mime_type: string | null;
+    image_size_bytes: number | null;
+    uploaded_at: string;
+    description: string | null;
+    website_url: string | null;
+    x_url: string | null;
+    telegram_url: string | null;
+    discord_url: string | null;
+  }>(
+    `
+      insert into senna.token_images (
+        id,
+        chain_id,
+        token_address,
+        image_url,
+        image_mime_type,
+        image_size_bytes,
+        image_data,
+        description,
+        website_url,
+        x_url,
+        telegram_url,
+        discord_url
+      )
+      values ($1, $2, lower($3), $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      on conflict (chain_id, token_address)
+      do update set
+        id = case when excluded.image_data is not null then excluded.id else senna.token_images.id end,
+        image_url = coalesce(excluded.image_url, senna.token_images.image_url),
+        image_mime_type = coalesce(excluded.image_mime_type, senna.token_images.image_mime_type),
+        image_size_bytes = coalesce(excluded.image_size_bytes, senna.token_images.image_size_bytes),
+        image_data = coalesce(excluded.image_data, senna.token_images.image_data),
+        description = excluded.description,
+        website_url = excluded.website_url,
+        x_url = excluded.x_url,
+        telegram_url = excluded.telegram_url,
+        discord_url = excluded.discord_url,
+        uploaded_at = case when excluded.image_data is not null then now() else senna.token_images.uploaded_at end,
+        updated_at = now()
+      returning image_url, image_mime_type, image_size_bytes, uploaded_at, description, website_url, x_url, telegram_url, discord_url
+    `,
+    [
+      input.id,
+      input.chainId,
+      input.tokenAddress,
+      input.imageUrl ?? null,
+      input.imageMimeType ?? null,
+      input.imageSizeBytes ?? null,
+      input.imageData ?? null,
+      input.description ?? null,
+      input.websiteUrl ?? null,
+      input.xUrl ?? null,
+      input.telegramUrl ?? null,
+      input.discordUrl ?? null,
+    ],
+  );
+
+  const row = result.rows[0];
+  return {
+    imageUrl: row.image_url ?? undefined,
+    imageMimeType: row.image_mime_type ?? undefined,
+    imageSizeBytes: row.image_size_bytes ?? undefined,
+    uploadedAt: row.uploaded_at,
+    description: row.description ?? undefined,
+    websiteUrl: row.website_url ?? undefined,
+    xUrl: row.x_url ?? undefined,
+    telegramUrl: row.telegram_url ?? undefined,
+    discordUrl: row.discord_url ?? undefined,
+  };
+}
+
+export async function getImageAsset(id: string): Promise<StoredImageAsset | null> {
+  const result = await pool.query<{
+    image_data: Buffer;
+    image_mime_type: string;
+    image_size_bytes: number;
+  }>(
+    `
+      select image_data, image_mime_type, image_size_bytes
+      from senna.collection_images
+      where id = $1
+        and image_data is not null
+      union all
+      select image_data, image_mime_type, image_size_bytes
+      from senna.token_images
+      where id = $1
+        and image_data is not null
+      limit 1
+    `,
+    [id],
+  );
+
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    imageData: row.image_data,
+    imageMimeType: row.image_mime_type,
+    imageSizeBytes: row.image_size_bytes,
+  };
+}
+
+export async function getCollectionImages(input: {
+  chainId: number;
+  addresses: string[];
+}): Promise<Record<string, ProjectImageMapping>> {
+  if (input.addresses.length === 0) return {};
+
+  const normalizedAddresses = input.addresses.map((address) => address.toLowerCase());
+  const result = await pool.query<{
+    collection_address: string;
+    image_url: string | null;
+    image_mime_type: string | null;
+    image_size_bytes: number | null;
+    uploaded_at: string;
+    description: string | null;
+    website_url: string | null;
+    x_url: string | null;
+    telegram_url: string | null;
+    discord_url: string | null;
+  }>(
+    `
+      select collection_address, image_url, image_mime_type, image_size_bytes, uploaded_at, description, website_url, x_url, telegram_url, discord_url
+      from senna.collection_images
+      where chain_id = $1
+        and collection_address = any($2::text[])
+    `,
+    [input.chainId, normalizedAddresses],
+  );
+
+  return Object.fromEntries(
+    result.rows.map((row) => [
+      row.collection_address,
+      {
+        imageUrl: row.image_url ?? undefined,
+        imageMimeType: row.image_mime_type ?? undefined,
+        imageSizeBytes: row.image_size_bytes ?? undefined,
+        uploadedAt: row.uploaded_at,
+        description: row.description ?? undefined,
+        websiteUrl: row.website_url ?? undefined,
+        xUrl: row.x_url ?? undefined,
+        telegramUrl: row.telegram_url ?? undefined,
+        discordUrl: row.discord_url ?? undefined,
+      },
+    ]),
+  );
+}
+
+export async function getTokenImages(input: {
+  chainId: number;
+  addresses: string[];
+}): Promise<Record<string, ProjectImageMapping>> {
+  if (input.addresses.length === 0) return {};
+
+  const normalizedAddresses = input.addresses.map((address) => address.toLowerCase());
+  const result = await pool.query<{
+    token_address: string;
+    image_url: string | null;
+    image_mime_type: string | null;
+    image_size_bytes: number | null;
+    uploaded_at: string;
+    description: string | null;
+    website_url: string | null;
+    x_url: string | null;
+    telegram_url: string | null;
+    discord_url: string | null;
+  }>(
+    `
+      select token_address, image_url, image_mime_type, image_size_bytes, uploaded_at, description, website_url, x_url, telegram_url, discord_url
+      from senna.token_images
+      where chain_id = $1
+        and token_address = any($2::text[])
+    `,
+    [input.chainId, normalizedAddresses],
+  );
+
+  return Object.fromEntries(
+    result.rows.map((row) => [
+      row.token_address,
+      {
+        imageUrl: row.image_url ?? undefined,
+        imageMimeType: row.image_mime_type ?? undefined,
+        imageSizeBytes: row.image_size_bytes ?? undefined,
+        uploadedAt: row.uploaded_at,
+        description: row.description ?? undefined,
+        websiteUrl: row.website_url ?? undefined,
+        xUrl: row.x_url ?? undefined,
+        telegramUrl: row.telegram_url ?? undefined,
+        discordUrl: row.discord_url ?? undefined,
+      },
+    ]),
+  );
+}
+
 export async function getHealthCounts() {
   const [sources, chunks] = await Promise.all([
     pool.query<{ count: string }>(`select count(*)::text as count from senna.doc_sources`),

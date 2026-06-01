@@ -1,10 +1,12 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { config } from "./config.js";
 import { closeDb } from "./db.js";
 import { logger } from "./logger.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerImageRoutes } from "./routes/images.js";
 
 const app = Fastify({
   logger: false,
@@ -14,8 +16,15 @@ const app = Fastify({
 await app.register(cors, {
   origin: config.corsOrigin === "*" ? true : config.corsOrigin,
 });
+await app.register(multipart, {
+  limits: {
+    fileSize: config.uploadMaxBytes,
+    files: 1,
+  },
+});
 
 await registerHealthRoutes(app);
+await registerImageRoutes(app);
 await registerChatRoutes(app);
 
 app.setErrorHandler((error, _request, reply) => {

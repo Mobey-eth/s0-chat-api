@@ -8,6 +8,9 @@ Senna is scoped to Stage0, RISE, RISE Testnet, EVM wallets, launchpad usage, NFT
 
 - `POST /api/chat` chat endpoint with session persistence.
 - `GET /api/chat/health` health and corpus-count endpoint.
+- `POST /api/images/collections` and `POST /api/images/tokens` for Stage0 app media/profile uploads.
+- `PUT /api/images/collections` and `PUT /api/images/tokens` for profile details without a new image.
+- `GET /api/images/collections`, `GET /api/images/tokens`, and `GET /api/images/:imageId` for media lookups.
 - PostgreSQL schema under `senna`.
 - Docs retrieval over Stage0 GitBook pages, selected RISE docs, and local app facts.
 - Rule-based action drafts for:
@@ -42,6 +45,8 @@ Important optional environment:
 ```bash
 DATABASE_SSL=true
 CHAT_CORS_ORIGIN=https://stage0.xyz
+STAGE0_API_PUBLIC_URL=https://senna-api.example.com
+STAGE0_UPLOAD_MAX_BYTES=2097152
 STAGE0_DOCS_BASE_URL=https://stagezerolabs.gitbook.io/stage0
 RISE_TESTNET_RPC_URL=https://testnet.riselabs.xyz
 RISE_TESTNET_CHAIN_ID=11155931
@@ -83,6 +88,10 @@ This creates:
 - `senna.action_drafts`
 - `senna.tool_runs`
 - `senna.rate_limit_windows`
+- `senna.collection_images`
+- `senna.token_images`
+
+The project image tables also store app-level project profile fields: description, website, X/Twitter, Telegram, and Discord. Actual NFT token metadata remains on-chain via token metadata URIs.
 
 ## Docs Sync
 

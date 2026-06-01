@@ -55,6 +55,6 @@ These routes may only be visible or usable for the configured admin wallet in th
 
 Senna can prepare action drafts that point users to Stage0 pages and provide prefill data. Senna does not execute transactions. Users must connect an EVM wallet, review details in the Stage0 app, and sign in their wallet.
 
-For NFT collection images, Stage0 expects collection image URIs that can be normalized from a CID, `ipfs://` URI, or `https://` URL. If a collection does not have explicit contract image metadata, the app can fall back to reading the first token metadata image on-chain where available.
+For NFT collection profile images and app-level collection profile fields, Stage0 supports backend-managed offchain uploads through Senna. Older collections still resolve images from contract metadata or, when needed, first-token metadata on-chain.
 
-Token image uploads in the create-token flow are preview/staging only until storage or database wiring is added.
+Token profile images and app-level token profile fields in the create-token flow are also stored through Senna and mapped to the token contract address for Stage0 app display.
