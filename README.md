@@ -40,22 +40,6 @@ DATABASE_URL=postgres://...
 DEEPSEEK_API_KEY=...
 ```
 
-Important optional environment:
-
-```bash
-DATABASE_SSL=true
-CHAT_CORS_ORIGIN=https://stage0.xyz
-STAGE0_API_PUBLIC_URL=https://senna-api.example.com
-STAGE0_UPLOAD_MAX_BYTES=2097152
-STAGE0_DOCS_BASE_URL=https://stagezerolabs.gitbook.io/stage0
-RISE_TESTNET_RPC_URL=https://testnet.riselabs.xyz
-RISE_TESTNET_CHAIN_ID=11155931
-RISE_TESTNET_EXPLORER_URL=https://explorer.testnet.riselabs.xyz
-STAGE0_APP_URL=https://stage0.xyz
-```
-
-## Request shape
-
 ```json
 {
   "sessionId": "optional-uuid",
