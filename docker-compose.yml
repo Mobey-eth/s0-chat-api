@@ -1,0 +1,23 @@
+services:
+  senna-chat-api:
+    build: .
+    container_name: senna-chat-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      CHAT_CORS_ORIGIN: https://stage0.xyz
+      CHAT_OUTPUT_MAX_TOKENS_FAST: "220"
+      CHAT_OUTPUT_MAX_TOKENS_DEEP: "420"
+      STAGE0_API_PUBLIC_URL: https://api.stage0.xyz
+      STAGE0_UPLOAD_MAX_BYTES: "2097152"
+    expose:
+      - "3000"
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true

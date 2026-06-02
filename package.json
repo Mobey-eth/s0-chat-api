@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:migrate": "tsx src/migrate.ts",
     "db:migrate:prod": "node dist/migrate.js",
-    "docs:sync": "tsx src/sync/gitbook.ts"
+    "docs:sync": "sh -c 'if [ -f dist/sync/gitbook.js ]; then node dist/sync/gitbook.js; else tsx src/sync/gitbook.ts; fi'"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",

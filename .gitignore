@@ -1,6 +1,37 @@
-node_modules
-dist
+# Dependencies
+node_modules/
+
+# Build and generated output
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment and secrets
 .env
 .env.*
 !.env.example
 Pasting-env.txt
+*.pem
+*.key
+*.crt
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local runtime/cache files
+.cache/
+tmp/
+temp/
+
+# Local Docker overrides
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
