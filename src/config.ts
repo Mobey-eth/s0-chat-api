@@ -28,6 +28,7 @@ const envSchema = z.object({
   DEEPSEEK_BASE_URL: z.string().url().default("https://api.deepseek.com"),
   DEEPSEEK_MODEL_FAST: z.string().min(1).default("deepseek-v4-flash"),
   DEEPSEEK_MODEL_COMPLEX: z.string().min(1).default("deepseek-v4-pro"),
+  ASSEMBLYAI_API_KEY: z.string().optional(),
 });
 
 const env = envSchema.parse(process.env);
@@ -62,4 +63,5 @@ export const config = {
   deepseekBaseUrl: env.DEEPSEEK_BASE_URL.replace(/\/$/, ""),
   deepseekModelFast: env.DEEPSEEK_MODEL_FAST,
   deepseekModelComplex: env.DEEPSEEK_MODEL_COMPLEX,
+  assemblyAiApiKey: env.ASSEMBLYAI_API_KEY,
 } as const;

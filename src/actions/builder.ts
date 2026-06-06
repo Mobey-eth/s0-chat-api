@@ -17,6 +17,7 @@ const CREATE_NFT_ROUTE = "/create/nft";
 const CREATE_PRESALE_ROUTE = "/create/presale";
 const TOKEN_LOCKER_ROUTE = "/tools/token-locker";
 const AIRDROP_ROUTE = "/tools/airdrop";
+const DOMAINS_ROUTE = "/domains";
 const LAUNCHPAD_ROUTE = "/presales";
 const DASHBOARD_ROUTE = "/dashboard";
 const TOOLS_ROUTE = "/tools";
@@ -76,12 +77,39 @@ function withTokenQuery(route: string, tokenAddress?: string) {
   return tokenAddress ? `${route}?token=${encodeURIComponent(tokenAddress)}` : route;
 }
 
+function withNameQuery(route: string, name?: string) {
+  return name ? `${route}?name=${encodeURIComponent(name)}` : route;
+}
+
 function parseTokenAddress(message: string) {
   return message.match(/\b0x[a-fA-F0-9]{40}\b/)?.[0] ?? "";
 }
 
 function parseQuotedValue(message: string) {
-  return message.match(/["']([^"']{2,120})["']/)?.[1]?.trim() ?? "";
+  const doubleQuoted = message.match(/"([^"]{2,120})"/)?.[1]?.trim();
+  if (doubleQuoted) return doubleQuoted;
+
+  const singleQuoted = message.match(/(?:^|[\s:=([{])'([^']{2,120})'(?:$|[\s.,;:)\]}])/)?.[1]?.trim();
+  return singleQuoted ?? "";
+}
+
+function cleanCapturedLabel(value: string) {
+  return value
+    .trim()
+    .replace(
+      /\s+\b(?:with|symbol|ticker|supply|amount|decimals?|mintable|burnable|taxable|plain|standard|non[-\s]?mintable|fixed\s+supply|base\s*uri|metadata|image|price|cost|starts?|ends?|sale)\b[\s\S]*$/i,
+      "",
+    )
+    .trim()
+    .replace(/[,.!?;:]+$/g, "")
+    .trim();
+}
+
+function parseNamedPhrase(message: string) {
+  const match =
+    message.match(/(?:called|named|name(?:d)?\s+is|name\s*:|name\s*=)\s+"?([A-Za-z0-9][A-Za-z0-9\s_-]{1,80})"?/i)?.[1] ??
+    "";
+  return match ? cleanCapturedLabel(match) : "";
 }
 
 function parseQuantityFromText(text: string): string {
@@ -166,10 +194,10 @@ function parseDays(message: string) {
 }
 
 function parseExplicitLockName(message: string) {
-  return (
-    message.match(/(?:called|named|description(?: is)?|label(?: it)?)(?:\s+as)?\s+"?([A-Za-z0-9\s_-]{2,48})"?/i)?.[1]?.trim() ??
-    ""
-  );
+  const match =
+    message.match(/(?:description(?: is)?|label(?: it)?)(?:\s+as)?\s+"?([A-Za-z0-9][A-Za-z0-9\s_-]{1,80})"?/i)?.[1] ??
+    parseNamedPhrase(message);
+  return match ? cleanCapturedLabel(match) : "";
 }
 
 function parseLooseShortText(message: string) {
@@ -177,6 +205,20 @@ function parseLooseShortText(message: string) {
   if (quoted) return quoted;
 
   const trimmed = message.trim();
+  if (
+    /\b(?:symbol|ticker|supply|amount|decimals?|mintable|burnable|taxable|plain|standard|non[-\s]?mintable|fixed\s+supply|token\s*type|address|recipient|recipients|days?|duration|native|eth|base\s*uri|metadata|image|price|cost|starts?|ends?|sale)\b/i.test(trimmed)
+  ) {
+    return "";
+  }
+
+  if (
+    /[.!?]/.test(trimmed) ||
+    /\b(?:i'?m|i\s+am)\s+trying\b/i.test(trimmed) ||
+    /\b(?:what\s+can\s+you\s+do|let'?s\s+say|for\s+example|suppose|imagine)\b/i.test(trimmed)
+  ) {
+    return "";
+  }
+
   if (
     trimmed.length >= 2 &&
     trimmed.length <= 64 &&
@@ -186,7 +228,8 @@ function parseLooseShortText(message: string) {
     !/^https?:\/\//i.test(trimmed) &&
     !/^ipfs:\/\//i.test(trimmed) &&
     !/^(hey|hi|hello|yo|sup|thanks|thank you|okay|ok)\b/i.test(trimmed) &&
-    !/^(lock|vest|create|deploy|make|launch|buy|claim|airdrop|open|show|help)\b/i.test(trimmed)
+    !/^(lock|vest|create|deploy|make|launch|buy|claim|airdrop|open|show|help)\b/i.test(trimmed) &&
+    !/\b(?:i\s+(?:want|need|would\s+like|wanna|am\s+trying)\s+to|let'?s|help\s+me|can\s+you|could\s+you)\s+(?:create|deploy|make|launch|lock|vest|airdrop|buy|register|grab|reserve|claim)\b/i.test(trimmed)
   ) {
     return trimmed;
   }
@@ -194,13 +237,42 @@ function parseLooseShortText(message: string) {
   return "";
 }
 
+function parseLabeledTextField(message: string, labels: string[]) {
+  const labelPattern = labels.join("|");
+  const patterns = [
+    new RegExp(`\\b(?:change|update|set|use|make)\\s+(?:the\\s+)?(?:${labelPattern})\\s+(?:to|as)\\s+["']?([A-Za-z0-9][A-Za-z0-9\\s_-]{1,80})["']?`, "i"),
+    new RegExp(`\\b(?:${labelPattern})\\s*(?:is|should\\s+be|=|:|to)\\s+["']?([A-Za-z0-9][A-Za-z0-9\\s_-]{1,80})["']?`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    const value = message.match(pattern)?.[1] ?? "";
+    if (value) return cleanCapturedLabel(value);
+  }
+
+  return "";
+}
+
+function parseLabeledSymbolField(message: string) {
+  const patterns = [
+    /\b(?:change|update|set|use|make)\s+(?:the\s+)?(?:symbol|ticker)\s+(?:to|as)\s+"?([A-Z0-9]{2,10})"?/i,
+    /\b(?:symbol|ticker)\s*(?:is|should\s+be|=|:|to)?\s+"?([A-Z0-9]{2,10})"?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const value = message.match(pattern)?.[1]?.trim() ?? "";
+    if (value) return value.toUpperCase();
+  }
+
+  return "";
+}
+
 function parseNameAfterKind(message: string, kind: "token" | "nft") {
   const noun = kind === "token" ? "token" : "(?:nft|collection|drop)";
-  return (
-    message.match(new RegExp(`(?:${noun})\\s+(?:called|named)\\s+"?([A-Za-z0-9\\s_-]{2,48})"?`, "i"))?.[1]?.trim() ??
-    message.match(/(?:called|named)\s+"?([A-Za-z0-9\s_-]{2,48})"?/i)?.[1]?.trim() ??
-    parseLooseShortText(message)
-  );
+  const kindNamed =
+    message.match(new RegExp(`(?:${noun})\\s+(?:called|named)\\s+"?([A-Za-z0-9][A-Za-z0-9\\s_-]{1,80})"?`, "i"))?.[1] ??
+    "";
+  const named = kindNamed || parseNamedPhrase(message);
+  return named ? cleanCapturedLabel(named) : parseLooseShortText(message);
 }
 
 function parseTokenName(message: string) {
@@ -232,7 +304,7 @@ function parseSupply(message: string) {
 function parseTokenType(message: string) {
   const lower = message.toLowerCase();
 
-  if (/\bnon[-\s]?mintable\b|\bfixed\s+supply\b/.test(lower)) return "non_mintable";
+  if (/\bnon[-\s]?mintable\b|\bfixed\s+supply\b/.test(lower)) return "nonMintable";
   if (/\bburnable\b/.test(lower)) return "burnable";
   if (/\bmintable\b/.test(lower)) return "mintable";
   if (/\btax(?:able)?\b/.test(lower)) return "taxable";
@@ -325,8 +397,31 @@ function countRecipientEntries(entries: string) {
     .filter(Boolean).length;
 }
 
+function parseRnsName(message: string): string {
+  const quoted = parseQuotedValue(message);
+  if (quoted && /^[a-z0-9_-]{3,32}$/i.test(quoted)) return quoted.toLowerCase();
+
+  const dotted = message.match(/\b([a-z0-9_-]{3,32})\.rise\b/i)?.[1];
+  if (dotted) return dotted.toLowerCase();
+
+  const labeled =
+    message.match(/(?:name|domain|rns)\s*(?:is|:|=)?\s*["']?([a-z0-9_-]{3,32})["']?/i)?.[1] ??
+    message.match(/(?:called|named)\s+["']?([a-z0-9_-]{3,32})["']?/i)?.[1] ??
+    message.match(/(?:buy|register|get|claim|grab|reserve)\s+(?:a\s+|the\s+)?(?:name|domain|rns)?\s*["']?([a-z0-9_-]{3,32})["']?/i)?.[1];
+  if (labeled && /^[a-z0-9_-]{3,32}$/i.test(labeled)) return labeled.toLowerCase();
+
+  // Lone short alphanumeric token after stopwords
+  const trimmed = message.trim().replace(/[.!?]+$/, "");
+  if (/^[a-z0-9_-]{3,32}$/i.test(trimmed)) {
+    if (!/^(hey|hi|hello|yo|sup|thanks|thank|okay|ok|yes|no|nope|yeah|please|cancel|stop)$/i.test(trimmed)) {
+      return trimmed.toLowerCase();
+    }
+  }
+  return "";
+}
+
 function stripLeadingInterjections(lower: string) {
-  return lower.replace(/^(?:hey|hi|hello|yo|sup|so|then|okay|ok|alright|please)[,!?\s]+/i, "").trim();
+  return lower.replace(/^(?:hey|hi|hello|yo|sup|so|then|okay|ok|alright|please|uhh+|umm+|uhmm+|err+|hmm+)[,!?\s]+/i, "").trim();
 }
 
 function looksActionable(message: string) {
@@ -335,11 +430,20 @@ function looksActionable(message: string) {
 
   if (/^(how|what|where|when|why|is|are|do|does|did)\b/.test(lower)) return false;
 
-  if (/^(can you|could you|would you|will you|help me|create|deploy|make|launch|lock|vest|airdrop|buy|contribute|open|take me|show me|navigate|set\s*up|setup)/i.test(lower)) {
+  if (/^(can you|could you|would you|will you|help me|create|deploy|make|launch|lock|vest|airdrop|buy|register|reserve|grab|claim|contribute|open|take me|show me|navigate|set\s*up|setup)/i.test(lower)) {
     return true;
   }
 
-  if (/\b(?:i\s+(?:want\s+to|need\s+to|would\s+like\s+to|wanna|gotta|am\s+trying\s+to|am\s+going\s+to)|i'?d\s+like\s+to|let'?s|let\s+me|gonna)\s+(?:create|deploy|make|launch|lock|vest|airdrop|open|set\s*up|setup)\b/i.test(lower)) {
+  if (/\b(?:i\s+(?:want\s+to|need\s+to|would\s+like\s+to|wanna|gotta|am\s+trying\s+to|am\s+going\s+to)|i'?d\s+like\s+to|let'?s|let\s+me|gonna)\s+(?:create|deploy|make|launch|lock|vest|airdrop|buy|register|grab|reserve|claim|open|set\s*up|setup)\b/i.test(lower)) {
+    return true;
+  }
+
+  if (
+    /\b(?:create|deploy|make|launch|lock|vest|airdrop|bulk\s+send|multi[-\s]?send|buy|register|grab|reserve|claim)\b/i.test(lower) &&
+    (/\b(?:token|tokens|erc[-\s]?20|nft|collection|drop|domain|name|rns|airdrop|lock|presale|launch)\b/i.test(lower) ||
+      /\b0x[a-fA-F0-9]{40}\b/.test(raw) ||
+      /\.rise\b/i.test(raw))
+  ) {
     return true;
   }
 
@@ -354,6 +458,94 @@ function isCancel(message: string) {
   return /^(cancel|stop|never mind|nevermind|leave it|drop it)\b/i.test(message.trim());
 }
 
+export function detectQuickActionIntent(message: string): ActionType | null {
+  const lower = stripLeadingInterjections(message.trim().toLowerCase());
+  if (/^(how|what|where|when|why|is|are|do|does|did)\b/.test(lower)) return null;
+
+  if (/(?:airdrop|bulk\s+send|multi[-\s]?send|send\s+tokens?\s+to\s+multiple)/i.test(lower)) {
+    return "airdrop_tokens";
+  }
+
+  if (/(?:buy|register|get|claim|grab|reserve)\s+(?:a\s+|the\s+)?(?:name|domain|rns)/i.test(lower) || /\.rise\b/i.test(lower)) {
+    return "buy_name";
+  }
+
+  if (/\b(lock|vest)\b/i.test(lower) && /\b(token|tokens|erc[-\s]?20|liquidity|supply)\b/i.test(lower)) {
+    return "lock_token";
+  }
+
+  if (/(?:create|deploy|make|launch)\s+(?:(?:a|an)\s+)?(?:new\s+)?(?:erc[-\s]?20\s+)?token/i.test(lower)) {
+    return "create_token";
+  }
+
+  return null;
+}
+
+export function detectPageOnlyActionIntent(message: string): { route: string; reply: string; summary: string } | null {
+  const lower = stripLeadingInterjections(message.trim().toLowerCase());
+  if (/^(how|what|where|when|why|is|are|do|does|did)\b/.test(lower)) return null;
+
+  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:my\s+)?dashboard/i.test(lower)) {
+    return {
+      route: DASHBOARD_ROUTE,
+      reply: "Opening your dashboard.",
+      summary: "Open the Stage0 dashboard.",
+    };
+  }
+
+  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:the\s+)?(?:launchpad|presales?)/i.test(lower)) {
+    return {
+      route: LAUNCHPAD_ROUTE,
+      reply: "Opening the launchpad.",
+      summary: "Open the Stage0 launchpad.",
+    };
+  }
+
+  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:my\s+)?(?:nfts?|collectibles|portfolio)/i.test(lower)) {
+    return {
+      route: "/my-nfts",
+      reply: "Opening your collectibles.",
+      summary: "Open your NFT collectibles.",
+    };
+  }
+
+  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:the\s+)?tools/i.test(lower)) {
+    return {
+      route: TOOLS_ROUTE,
+      reply: "Opening tools.",
+      summary: "Open Stage0 tools.",
+    };
+  }
+
+  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:the\s+)?(?:domains|names)(?:\s+page)?/i.test(lower)) {
+    return {
+      route: DOMAINS_ROUTE,
+      reply: "Opening names.",
+      summary: "Open the names page.",
+    };
+  }
+
+  if (/(?:create|deploy|make|launch|mint)\s+(?:(?:a|an)\s+)?(?:new\s+)?(?:nft|collection|drop)/i.test(lower)) {
+    return {
+      route: CREATE_NFT_ROUTE,
+      reply: "NFT creation lives on the full form. I can take you there.",
+      summary: "Open the NFT creation page.",
+    };
+  }
+
+  if (/(?:create|start|launch|setup|set\s+up)\s+(?:(?:a|an)\s+)?(?:new\s+)?(?:presale|token\s+sale|sale)/i.test(lower)) {
+    return {
+      route: CREATE_PRESALE_ROUTE,
+      reply: "Presale setup lives on the full form. I can take you there.",
+      summary: "Open the presale creation page.",
+    };
+  }
+
+  return null;
+}
+
+// --- Builders -----------------------------------------------------------------
+
 export function buildCreateToken(input: {
   name?: string;
   symbol?: string;
@@ -366,8 +558,8 @@ export function buildCreateToken(input: {
   const missing: string[] = [];
   if (!input.name) missing.push("name");
   if (!input.symbol) missing.push("symbol");
-  if (!input.initialSupply) missing.push("initialSupply");
   if (!input.tokenType) missing.push("tokenType");
+  if (!input.initialSupply) missing.push("initialSupply");
   if (!input.decimals) missing.push("decimals");
 
   return ensure({
@@ -385,11 +577,10 @@ export function buildCreateToken(input: {
       tokenImageURI: input.tokenImageURI || "",
     },
     summary: `Create "${input.name || "..."}" (${input.symbol || "..."}) on RISE Testnet.`,
-    warnings: ["Token creation may be admin-restricted in the current Stage0 app."],
+    warnings: [],
     missingFields: missing,
     nextSteps: [
-      "Connect an EVM wallet on RISE Testnet",
-      "Review the token details in Stage0",
+      "Review the token details in Senna",
       "Sign the deployment transaction in your wallet",
     ],
   });
@@ -437,13 +628,9 @@ export function buildCreateNft(input: {
       saleEnd: input.saleEnd || "",
     },
     summary: `Create NFT collection "${input.name || "..."}" (${input.symbol || "..."}) on RISE Testnet.`,
-    warnings: [
-      "Base URI and collection image URI should be browser-readable after normalization.",
-      "Review sale windows and wallet limits carefully before signing.",
-    ],
+    warnings: [],
     missingFields: missing,
     nextSteps: [
-      "Connect an EVM wallet on RISE Testnet",
       "Review collection metadata and sale phases",
       "Sign the deployment transaction in your wallet",
     ],
@@ -462,13 +649,9 @@ export function buildCreatePresale(input: { saleToken?: string }): ActionDraft {
     summary: input.saleToken
       ? `Open presale setup for ${input.saleToken.slice(0, 8)}...`
       : "Open the Stage0 presale setup page.",
-    warnings: [
-      "Presale setup may be admin-restricted in the current Stage0 app.",
-      "Sale schedules, caps, rates, and token addresses should be reviewed manually.",
-    ],
+    warnings: [],
     missingFields: [],
     nextSteps: [
-      "Connect an EVM wallet on RISE Testnet",
       "Fill sale schedule, caps, and token details",
       "Review carefully, then sign in the app",
     ],
@@ -486,7 +669,7 @@ export function buildLockToken(input: {
   if (!input.tokenAddress) missing.push("tokenAddress");
   if (!input.amount) missing.push("amount");
   if (!input.durationDays) missing.push("durationDays");
-  if (!input.name) missing.push("lock name");
+  if (!input.name) missing.push("lockName");
 
   return ensure({
     actionType: "lock_token",
@@ -501,12 +684,11 @@ export function buildLockToken(input: {
       description: input.description || input.name || "",
     },
     summary: `Lock ${input.amount || "..."} tokens for ${input.durationDays || "..."} days${input.name ? ` (${input.name})` : ""}.`,
-    warnings: ["Token locker access may be admin-restricted in the current Stage0 app."],
+    warnings: [],
     missingFields: missing,
     nextSteps: [
-      "Connect an EVM wallet on RISE Testnet",
-      "Approve the token transfer in the locker form",
-      "Confirm the lock transaction",
+      "Approve the token transfer",
+      "Sign the lock transaction",
     ],
   });
 }
@@ -519,6 +701,9 @@ export function buildAirdrop(input: {
   const isNative = input.nativeToken === "true";
   const missing: string[] = [];
   if (!isNative && !input.tokenAddress) missing.push("tokenAddress");
+  if (!input.recipientsData || countRecipientEntries(input.recipientsData) === 0) {
+    missing.push("recipientsData");
+  }
   const recipientCount = countRecipientEntries(input.recipientsData || "");
 
   return ensure({
@@ -532,15 +717,32 @@ export function buildAirdrop(input: {
       nativeToken: isNative ? "true" : "false",
     },
     summary: `Airdrop ${isNative ? "native ETH" : "tokens"}${input.tokenAddress ? ` from ${input.tokenAddress.slice(0, 8)}...` : ""}${recipientCount > 0 ? ` to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}` : ""}.`,
-    warnings: [
-      "Airdrop access may be admin-restricted in the current Stage0 app.",
-      "Double-check every recipient before signing. Airdrops are not reversible.",
-    ],
+    warnings: [],
     missingFields: missing,
     nextSteps: [
-      "Connect an EVM wallet on RISE Testnet",
-      "Add or review the recipient list",
-      "Approve and sign the multisend transaction",
+      isNative ? "Sign the bulk send transaction" : "Approve the token transfer, then sign the bulk send",
+    ],
+  });
+}
+
+export function buildBuyName(input: { name?: string }): ActionDraft {
+  const missing: string[] = [];
+  if (!input.name) missing.push("name");
+
+  return ensure({
+    actionType: "buy_name",
+    targetRoute: withNameQuery(DOMAINS_ROUTE, input.name),
+    requiredWallet: "evm",
+    requiredChain: "rise_testnet",
+    prefill: {
+      name: input.name || "",
+    },
+    summary: input.name ? `Register "${input.name}.rise" for 1 year.` : "Register a .rise name for 1 year.",
+    warnings: [],
+    missingFields: missing,
+    nextSteps: [
+      "Approve the RNS registry once (if first time)",
+      "Sign the register transaction in your wallet",
     ],
   });
 }
@@ -573,43 +775,47 @@ export function buildOpenDashboard(): ActionDraft {
   });
 }
 
-export function buildOpenRoute(route: string): ActionDraft {
+export function buildOpenRoute(route: string, summary?: string): ActionDraft {
   return ensure({
     actionType: "open_route",
     targetRoute: route,
     requiredWallet: null,
     requiredChain: null,
     prefill: {},
-    summary: `Navigate to ${route}.`,
-    warnings: route.startsWith("/admin") || route === "/domains" ? ["This route may be admin-restricted."] : [],
+    summary: summary ?? `Navigate to ${route}.`,
+    warnings: [],
     missingFields: [],
     nextSteps: [`Open ${route} in the app.`],
   });
 }
 
-function mergeCreateToken(existing: ActionDraft, message: string) {
-  const firstMissing = existing.missingFields[0];
-  const tokenTypeStillMissing = existing.missingFields.includes("tokenType");
-  const decimalsStillMissing = existing.missingFields.includes("decimals");
+// --- Order-agnostic merge helpers ---------------------------------------------
 
-  let nextTokenType: string | undefined = tokenTypeStillMissing ? "" : existing.prefill.tokenType;
-  if (tokenTypeStillMissing) {
+function mergeCreateToken(existing: ActionDraft, message: string) {
+  const nextName = existing.prefill.name || parseTokenName(message);
+  const nextSymbol = existing.prefill.symbol || parseTokenSymbol(message);
+  const nextSupply = existing.prefill.initialSupply || parseSupply(message);
+
+  const tokenTypeStillMissing = existing.missingFields.includes("tokenType");
+  let nextTokenType = tokenTypeStillMissing ? "" : existing.prefill.tokenType;
+  if (!nextTokenType || tokenTypeStillMissing) {
     const parsed = parseTokenType(message);
     if (parsed) nextTokenType = parsed;
-    else if (firstMissing === "tokenType" && isSkipResponse(message)) nextTokenType = "plain";
+    else if (isSkipResponse(message) && existing.missingFields[0] === "tokenType") nextTokenType = "plain";
   }
 
-  let nextDecimals: string | undefined = decimalsStillMissing ? "" : existing.prefill.decimals;
-  if (decimalsStillMissing) {
+  let nextDecimals = existing.prefill.decimals && existing.prefill.decimals !== "18" ? existing.prefill.decimals : "";
+  if (!existing.missingFields.includes("decimals") && existing.prefill.decimals) nextDecimals = existing.prefill.decimals;
+  if (!nextDecimals || existing.missingFields.includes("decimals")) {
     const parsed = parseDecimals(message);
     if (parsed) nextDecimals = parsed;
-    else if (firstMissing === "decimals" && isSkipResponse(message)) nextDecimals = "18";
+    else if (isSkipResponse(message) && existing.missingFields[0] === "decimals") nextDecimals = "18";
   }
 
   return buildCreateToken({
-    name: existing.prefill.name || parseTokenName(message),
-    symbol: existing.prefill.symbol || parseTokenSymbol(message),
-    initialSupply: existing.prefill.initialSupply || parseSupply(message),
+    name: nextName,
+    symbol: nextSymbol,
+    initialSupply: nextSupply,
     decimals: nextDecimals || undefined,
     initialRecipient: existing.prefill.initialRecipient || parseTokenAddress(message),
     tokenType: nextTokenType || undefined,
@@ -618,8 +824,8 @@ function mergeCreateToken(existing: ActionDraft, message: string) {
 }
 
 function mergeCreateNft(existing: ActionDraft, message: string) {
-  const firstMissing = existing.missingFields[0];
   const dateLike = parseDateLike(message);
+  const firstMissing = existing.missingFields[0];
 
   return buildCreateNft({
     name: existing.prefill.name || parseCollectionName(message),
@@ -637,13 +843,11 @@ function mergeCreateNft(existing: ActionDraft, message: string) {
 }
 
 function mergeLockToken(existing: ActionDraft, message: string) {
-  const firstMissing = existing.missingFields[0];
-  const shouldParseDuration = firstMissing === "durationDays" || /\bdays?\b/i.test(message);
-  const parsedDuration = existing.prefill.duration || (shouldParseDuration ? parseDays(message) : "");
+  const parsedDuration = existing.prefill.duration || parseDays(message);
   const parsedName =
-    firstMissing === "lock name"
-      ? existing.prefill.name || parseExplicitLockName(message) || parseLooseShortText(message)
-      : existing.prefill.name || parseExplicitLockName(message);
+    existing.prefill.name ||
+    parseExplicitLockName(message) ||
+    (existing.missingFields[0] === "lockName" ? parseLooseShortText(message) : "");
 
   return buildLockToken({
     tokenAddress: existing.prefill.token || parseTokenAddress(message),
@@ -655,46 +859,211 @@ function mergeLockToken(existing: ActionDraft, message: string) {
 }
 
 function mergeAirdrop(existing: ActionDraft, message: string) {
+  const isNative = existing.prefill.nativeToken === "true" || /\bnative\b|\beth\b/i.test(message);
   return buildAirdrop({
-    tokenAddress: existing.prefill.token || parseTokenAddress(message),
+    tokenAddress: existing.prefill.token || (isNative ? "" : parseTokenAddress(message)),
     recipientsData: existing.prefill.recipientsData || parseRecipientEntries(message),
-    nativeToken: existing.prefill.nativeToken,
+    nativeToken: isNative ? "true" : existing.prefill.nativeToken,
   });
+}
+
+function mergeBuyName(existing: ActionDraft, message: string) {
+  return buildBuyName({
+    name: existing.prefill.name || parseRnsName(message),
+  });
+}
+
+function updateCreateTokenDraft(existing: ActionDraft, message: string) {
+  const next = { ...existing.prefill };
+  let changed = false;
+
+  const name = parseLabeledTextField(message, ["token\\s+name", "name"]) || parseNamedPhrase(message);
+  if (name) {
+    next.name = name;
+    changed = true;
+  }
+
+  const symbol = parseLabeledSymbolField(message);
+  if (symbol) {
+    next.symbol = symbol;
+    changed = true;
+  }
+
+  if (/\b(?:supply|amount|mint|total|max\s+supply)\b/i.test(message)) {
+    const supply = parseSupply(message);
+    if (supply) {
+      next.initialSupply = supply;
+      changed = true;
+    }
+  }
+
+  if (/\bdecimals?\b/i.test(message) || /^\s*\d{1,2}\s*$/.test(message)) {
+    const decimals = parseDecimals(message);
+    if (decimals) {
+      next.decimals = decimals;
+      changed = true;
+    }
+  }
+
+  if (/\b(?:token\s*)?type\b/i.test(message) || /\b(?:plain|standard|basic|simple|regular|normal|mintable|burnable|taxable|non[-\s]?mintable|fixed\s+supply)\b/i.test(message)) {
+    const tokenType = parseTokenType(message);
+    if (tokenType) {
+      next.tokenType = tokenType;
+      changed = true;
+    }
+  }
+
+  if (/\bimage\b/i.test(message)) {
+    const tokenImageURI = parseCollectionImageUri(message);
+    if (tokenImageURI) {
+      next.tokenImageURI = tokenImageURI;
+      changed = true;
+    }
+  }
+
+  if (!changed) return null;
+
+  return buildCreateToken({
+    name: next.name,
+    symbol: next.symbol,
+    initialSupply: next.initialSupply,
+    decimals: next.decimals,
+    initialRecipient: next.initialRecipient,
+    tokenType: next.tokenType,
+    tokenImageURI: next.tokenImageURI,
+  });
+}
+
+function updateLockTokenDraft(existing: ActionDraft, message: string) {
+  const next = { ...existing.prefill };
+  let changed = false;
+
+  const tokenAddress = parseTokenAddress(message);
+  if (tokenAddress) {
+    next.token = tokenAddress;
+    changed = true;
+  }
+
+  if (/\b(?:amount|lock|vest)\b/i.test(message)) {
+    const amount = parseAmount(message);
+    if (amount) {
+      next.amount = amount;
+      changed = true;
+    }
+  }
+
+  if (/\b(?:days?|duration)\b/i.test(message)) {
+    const duration = parseDays(message);
+    if (duration) {
+      next.duration = duration;
+      changed = true;
+    }
+  }
+
+  const name = parseExplicitLockName(message);
+  if (name) {
+    next.name = name;
+    next.description = next.description || name;
+    changed = true;
+  }
+
+  if (!changed) return null;
+
+  return buildLockToken({
+    tokenAddress: next.token,
+    amount: next.amount,
+    durationDays: next.duration,
+    name: next.name,
+    description: next.description,
+  });
+}
+
+function updateAirdropDraft(existing: ActionDraft, message: string) {
+  const next = { ...existing.prefill };
+  let changed = false;
+
+  if (/\bnative\b|\beth\b/i.test(message)) {
+    next.nativeToken = "true";
+    next.token = "";
+    changed = true;
+  }
+
+  const tokenAddress = parseTokenAddress(message);
+  if (tokenAddress && !/\brecipient/i.test(message)) {
+    next.token = tokenAddress;
+    next.nativeToken = "false";
+    changed = true;
+  }
+
+  const recipientsData = parseRecipientEntries(message);
+  if (recipientsData) {
+    next.recipientsData = recipientsData;
+    changed = true;
+  }
+
+  if (!changed) return null;
+
+  return buildAirdrop({
+    tokenAddress: next.token,
+    recipientsData: next.recipientsData,
+    nativeToken: next.nativeToken,
+  });
+}
+
+function updateBuyNameDraft(existing: ActionDraft, message: string) {
+  const name = parseRnsName(message);
+  if (!name || name === existing.prefill.name) return null;
+  return buildBuyName({ name });
 }
 
 export function canContinueActionDraft(existing: ActionDraft, message: string) {
   if (isCancel(message) || isGreeting(message)) return false;
+  if (existing.missingFields.length === 0) return false;
 
-  const firstMissing = existing.missingFields[0];
-  if (!firstMissing) return false;
-
+  // Order-agnostic: any parser that lands a value, anywhere, can advance the draft.
   if (existing.actionType === "lock_token") {
-    if (firstMissing === "tokenAddress") return Boolean(parseTokenAddress(message));
-    if (firstMissing === "amount") return Boolean(parseAmount(message));
-    if (firstMissing === "durationDays") return Boolean(parseDays(message));
-    if (firstMissing === "lock name") return Boolean(parseExplicitLockName(message) || parseLooseShortText(message));
+    return (
+      Boolean(parseTokenAddress(message)) ||
+      Boolean(parseAmount(message)) ||
+      Boolean(parseDays(message)) ||
+      Boolean(parseExplicitLockName(message)) ||
+      (existing.missingFields[0] === "lockName" && Boolean(parseLooseShortText(message)))
+    );
   }
 
   if (existing.actionType === "create_token") {
-    if (firstMissing === "name") return Boolean(parseTokenName(message));
-    if (firstMissing === "symbol") return Boolean(parseTokenSymbol(message));
-    if (firstMissing === "initialSupply") return Boolean(parseSupply(message));
-    if (firstMissing === "tokenType") return Boolean(parseTokenType(message)) || isSkipResponse(message);
-    if (firstMissing === "decimals") return Boolean(parseDecimals(message)) || isSkipResponse(message);
+    return (
+      Boolean(parseTokenName(message)) ||
+      Boolean(parseTokenSymbol(message)) ||
+      Boolean(parseSupply(message)) ||
+      Boolean(parseTokenType(message)) ||
+      Boolean(parseDecimals(message)) ||
+      isSkipResponse(message)
+    );
   }
 
   if (existing.actionType === "create_nft") {
-    if (firstMissing === "name") return Boolean(parseCollectionName(message));
-    if (firstMissing === "symbol") return Boolean(parseTokenSymbol(message));
-    if (firstMissing === "baseURI") return Boolean(parseBaseUri(message) || parseUri(message, []));
-    if (firstMissing === "collectionImageURI") return Boolean(parseCollectionImageUri(message) || parseUri(message, []));
-    if (firstMissing === "maxSupply") return Boolean(parseSupply(message));
-    if (firstMissing === "mintPrice") return Boolean(parseMintPrice(message));
-    if (firstMissing === "saleStart" || firstMissing === "saleEnd") return Boolean(parseDateLike(message) || parseLooseShortText(message));
+    return (
+      Boolean(parseCollectionName(message)) ||
+      Boolean(parseTokenSymbol(message)) ||
+      Boolean(parseBaseUri(message) || parseUri(message, [])) ||
+      Boolean(parseCollectionImageUri(message) || parseUri(message, [])) ||
+      Boolean(parseSupply(message)) ||
+      Boolean(parseMintPrice(message)) ||
+      Boolean(parseDateLike(message))
+    );
   }
 
   if (existing.actionType === "airdrop_tokens") {
-    if (firstMissing === "tokenAddress") return Boolean(parseTokenAddress(message));
+    return (
+      Boolean(parseTokenAddress(message)) ||
+      Boolean(parseRecipientEntries(message)) ||
+      /\bnative\b|\beth\b/i.test(message)
+    );
+  }
+
+  if (existing.actionType === "buy_name") {
+    return Boolean(parseRnsName(message));
   }
 
   return false;
@@ -707,64 +1076,85 @@ export function continueActionDraft(existing: ActionDraft, message: string): Act
   if (existing.actionType === "create_token") return mergeCreateToken(existing, message);
   if (existing.actionType === "create_nft") return mergeCreateNft(existing, message);
   if (existing.actionType === "airdrop_tokens") return mergeAirdrop(existing, message);
+  if (existing.actionType === "buy_name") return mergeBuyName(existing, message);
 
   return existing;
 }
 
+export function updateCompletedActionDraft(existing: ActionDraft, message: string): ActionDraft | null {
+  if (isCancel(message) || isGreeting(message)) return null;
+  if (existing.missingFields.length > 0) return null;
+
+  if (existing.actionType === "create_token") return updateCreateTokenDraft(existing, message);
+  if (existing.actionType === "lock_token") return updateLockTokenDraft(existing, message);
+  if (existing.actionType === "airdrop_tokens") return updateAirdropDraft(existing, message);
+  if (existing.actionType === "buy_name") return updateBuyNameDraft(existing, message);
+
+  return null;
+}
+
 export function getActionFollowUp(draft: ActionDraft) {
   if (draft.actionType === "lock_token") {
-    if (draft.missingFields.includes("tokenAddress")) return "Send me the ERC-20 token address first.";
-    if (draft.missingFields.includes("amount")) return "How many tokens should I lock?";
-    if (draft.missingFields.includes("durationDays")) return "How many days should the lock run?";
-    if (draft.missingFields.includes("lock name")) return "Give the lock a short name or description, then I'll tee it up in the app.";
+    if (draft.missingFields.includes("tokenAddress")) return "Got it. What's the ERC-20 token address?";
+    if (draft.missingFields.includes("amount")) return "How many tokens should we lock?";
+    if (draft.missingFields.includes("durationDays")) return "Lock for how many days?";
+    if (draft.missingFields.includes("lockName")) return "Give the lock a short name (something like 'Liquidity Lock').";
   }
 
   if (draft.actionType === "create_token") {
-    if (draft.missingFields.includes("name")) return "What should the token name be?";
-    if (draft.missingFields.includes("symbol")) return "What symbol should I use?";
-    if (draft.missingFields.includes("initialSupply")) return "What total supply should I use? You can say a number or something like \"1 million\".";
+    if (draft.missingFields.includes("name")) return "What should the token be called?";
+    if (draft.missingFields.includes("symbol")) return "What ticker symbol? (2-10 chars, like RISE.)";
     if (draft.missingFields.includes("tokenType")) {
       return [
-        "What token type? Pick one:",
-        "- plain - standard fixed supply",
-        "- mintable - owner can mint more later",
-        "- burnable - holders can burn tokens",
-        "- non-mintable - fixed cap, no future minting",
+        "What type of token?",
         "",
-        "Say \"plain\" if you're unsure.",
+        "- Plain: standard fixed supply",
+        "- Mintable: owner can mint more later",
+        "- Burnable: holders can burn",
+        "- Taxable: auto-tax on transfers",
+        "- Non-mintable: fixed cap, no future mint",
+        "",
+        "If unsure, say plain.",
       ].join("\n");
     }
-    if (draft.missingFields.includes("decimals")) return "How many decimals? 18 is the ERC-20 standard. Say a number, or \"default\" for 18.";
+    if (draft.missingFields.includes("initialSupply")) return "What initial supply? You can say a number or '1 million'.";
+    if (draft.missingFields.includes("decimals")) return "How many decimals? 18 is standard; say 'default' to use that.";
   }
 
   if (draft.actionType === "create_nft") {
-    if (draft.missingFields.includes("name")) return "What should the NFT collection name be?";
-    if (draft.missingFields.includes("symbol")) return "What collection symbol should I use?";
-    if (draft.missingFields.includes("baseURI")) return "Send the base URI for token metadata. A CID, ipfs:// URI, or https:// URI is fine.";
-    if (draft.missingFields.includes("collectionImageURI")) return "Send the collection image URI. A CID, ipfs:// URI, or https:// image link is fine.";
-    if (draft.missingFields.includes("maxSupply")) return "What max supply should this collection have?";
-    if (draft.missingFields.includes("mintPrice")) return "What public mint price in ETH should I use?";
-    if (draft.missingFields.includes("saleStart")) return "When should public mint start? Use a clear date/time; the app will still need final review.";
-    if (draft.missingFields.includes("saleEnd")) return "When should public mint end? Use a clear date/time; the app will still need final review.";
+    if (draft.missingFields.includes("name")) return "What should the NFT collection be called?";
+    if (draft.missingFields.includes("symbol")) return "What collection symbol?";
+    if (draft.missingFields.includes("baseURI")) return "What's the base URI for metadata? (CID, ipfs://, or https:// works.)";
+    if (draft.missingFields.includes("collectionImageURI")) return "What's the collection image URI?";
+    if (draft.missingFields.includes("maxSupply")) return "Max supply?";
+    if (draft.missingFields.includes("mintPrice")) return "Public mint price in ETH?";
+    if (draft.missingFields.includes("saleStart")) return "When should public mint start?";
+    if (draft.missingFields.includes("saleEnd")) return "When should public mint end?";
   }
 
   if (draft.actionType === "airdrop_tokens") {
-    if (draft.missingFields.includes("tokenAddress")) return "Send me the ERC-20 token address you want to airdrop, or say native ETH if you mean RISE testnet ETH.";
+    if (draft.missingFields.includes("tokenAddress")) return "What ERC-20 token are we airdropping? Send the address, or say 'native ETH'.";
+    if (draft.missingFields.includes("recipientsData")) return "Paste recipients, one per line as `0xaddress,amount`.";
   }
 
-  return "I need one or two details before I can set that up in the app.";
+  if (draft.actionType === "buy_name") {
+    if (draft.missingFields.includes("name")) return "What name do you want to grab? (Letters, numbers, hyphens or underscores, 3-32 chars.)";
+  }
+
+  return "Almost there. One more detail before we're set.";
 }
 
 export function getActionReadyReply(draft: ActionDraft) {
-  if (draft.actionType === "lock_token") return "Lock details are ready. Review them in Stage0, then sign in your wallet.";
-  if (draft.actionType === "create_token") return "Token setup is ready. Review it in Stage0, then sign in your wallet.";
-  if (draft.actionType === "create_nft") return "NFT collection setup is ready. Review metadata, sale windows, and wallet limits in Stage0 before signing.";
-  if (draft.actionType === "airdrop_tokens") return "Airdrop setup is ready. Review recipients carefully in Stage0 before signing.";
-  if (draft.actionType === "create_presale") return "Presale setup opens in Stage0. Fill the final schedule, caps, and rates there before signing.";
+  if (draft.actionType === "lock_token") return "Lock is ready to sign. Review the details and sign in the chat.";
+  if (draft.actionType === "create_token") return "Token is ready to sign. Take a look and sign below.";
+  if (draft.actionType === "create_nft") return "NFT collection is ready. Review metadata and sale windows before signing.";
+  if (draft.actionType === "airdrop_tokens") return "Airdrop is ready. Double-check recipients, then sign.";
+  if (draft.actionType === "buy_name") return "Name is ready to register. Sign below to claim it for 1 year.";
+  if (draft.actionType === "create_presale") return "Presale setup is staged. Open it in Stage0 to finish.";
   if (draft.actionType === "open_launchpad") return "Opening the Stage0 launchpad.";
   if (draft.actionType === "open_dashboard") return "Opening your Stage0 dashboard.";
 
-  return "Done. I set that route up in the app.";
+  return "Done. Action ready below.";
 }
 
 export function classifyAndBuildAction(message: string): ActionDraft | null {
@@ -817,6 +1207,10 @@ export function classifyAndBuildAction(message: string): ActionDraft | null {
     });
   }
 
+  if (/(?:buy|register|get|claim|grab|reserve)\s+(?:a\s+|the\s+)?(?:name|domain|rns)/i.test(lower) || /\.rise\b/i.test(lower)) {
+    return buildBuyName({ name: parseRnsName(message) });
+  }
+
   if (/(?:go\s+to|open|show|navigate|take\s+me\s+to)\s+(?:the\s+)?(?:launchpad|presales?)/i.test(lower)) {
     return buildOpenLaunchpad();
   }
@@ -835,4 +1229,56 @@ export function classifyAndBuildAction(message: string): ActionDraft | null {
   }
 
   return null;
+}
+
+/**
+ * Build an empty draft for a known quick action, so the chat can immediately start asking
+ * for the first missing field without any free-text classification.
+ */
+export function startQuickAction(actionType: ActionType): ActionDraft | null {
+  switch (actionType) {
+    case "create_token":
+      return buildCreateToken({});
+    case "lock_token":
+      return buildLockToken({});
+    case "airdrop_tokens":
+      return buildAirdrop({ nativeToken: "false" });
+    case "buy_name":
+      return buildBuyName({});
+    case "create_nft":
+      return buildCreateNft({});
+    case "create_presale":
+      return buildCreatePresale({});
+    case "open_launchpad":
+      return buildOpenLaunchpad();
+    case "open_dashboard":
+      return buildOpenDashboard();
+    default:
+      return null;
+  }
+}
+
+/**
+ * Returns a short list of chip-style suggestions for the *current* missing field on a draft.
+ * Used to populate the floating suggestion bubbles when the user is mid-flow.
+ */
+export function suggestForDraftField(draft: ActionDraft): string[] {
+  const first = draft.missingFields[0];
+  if (!first) return [];
+
+  if (draft.actionType === "create_token") {
+    if (first === "tokenType") return ["Plain", "Mintable", "Burnable"];
+    if (first === "decimals") return ["18", "9", "6"];
+    if (first === "initialSupply") return ["1,000,000", "100,000,000", "1,000,000,000"];
+  }
+
+  if (draft.actionType === "lock_token") {
+    if (first === "durationDays") return ["30 days", "90 days", "365 days"];
+  }
+
+  if (draft.actionType === "airdrop_tokens") {
+    if (first === "tokenAddress") return ["Native ETH"];
+  }
+
+  return [];
 }

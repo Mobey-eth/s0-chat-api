@@ -4,6 +4,7 @@ export const ACTION_TYPES = [
   "create_presale",
   "lock_token",
   "airdrop_tokens",
+  "buy_name",
   "open_launchpad",
   "open_dashboard",
   "open_route",

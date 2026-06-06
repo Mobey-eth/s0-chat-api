@@ -16,6 +16,10 @@ function toJson(value: unknown) {
   return value == null ? null : JSON.stringify(value);
 }
 
+function isUndefinedColumnError(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "42703");
+}
+
 export interface RetrievedDocChunk {
   id: string;
   source_url: string;
@@ -312,6 +316,78 @@ export async function countSessionUserMessages(sessionId: string) {
   );
 
   return Number(result.rows[0]?.count ?? "0");
+}
+
+export async function getOffTopicStrikes(sessionId: string): Promise<number> {
+  try {
+    const result = await pool.query<{ off_topic_strikes: number }>(
+      `select off_topic_strikes from senna.chat_sessions where id = $1`,
+      [sessionId],
+    );
+    return Number(result.rows[0]?.off_topic_strikes ?? 0);
+  } catch (error) {
+    if (isUndefinedColumnError(error)) return 0;
+    throw error;
+  }
+}
+
+export async function incrementOffTopicStrikes(sessionId: string): Promise<number> {
+  try {
+    const result = await pool.query<{ off_topic_strikes: number }>(
+      `
+        update senna.chat_sessions
+          set off_topic_strikes = off_topic_strikes + 1,
+              updated_at = now()
+          where id = $1
+          returning off_topic_strikes
+      `,
+      [sessionId],
+    );
+    return Number(result.rows[0]?.off_topic_strikes ?? 1);
+  } catch (error) {
+    if (isUndefinedColumnError(error)) return 1;
+    throw error;
+  }
+}
+
+export async function resetOffTopicStrikes(sessionId: string) {
+  try {
+    await pool.query(
+      `
+        update senna.chat_sessions
+          set off_topic_strikes = 0,
+              updated_at = now()
+          where id = $1
+            and off_topic_strikes > 0
+      `,
+      [sessionId],
+    );
+  } catch (error) {
+    if (isUndefinedColumnError(error)) return;
+    throw error;
+  }
+}
+
+export async function logChatError(input: {
+  sessionId?: string | null;
+  scope: string;
+  code: string;
+  internalMessage?: string;
+  httpStatus?: number;
+}) {
+  await pool.query(
+    `
+      insert into senna.error_log (session_id, scope, code, internal_message, http_status)
+      values ($1, $2, $3, $4, $5)
+    `,
+    [
+      input.sessionId ?? null,
+      input.scope,
+      input.code,
+      input.internalMessage ?? null,
+      input.httpStatus ?? null,
+    ],
+  );
 }
 
 export async function takeRateLimit(input: {

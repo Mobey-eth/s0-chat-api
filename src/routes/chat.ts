@@ -1,16 +1,58 @@
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { classifyAndBuildAction, continueActionDraft, getActionFollowUp, getActionReadyReply } from "../actions/builder.js";
-import type { ActionDraft } from "../actions/types.js";
-import { appendChatMessage, countSessionUserMessages, createChatSession, getLatestActionDraft, insertToolRun, saveActionDraft, takeRateLimit } from "../db.js";
-import { guardActionDraft, guardAssistantOutput, guardUserMessage, stripSelfDescription } from "../guardrails.js";
-import { generateDeepSeekAnswer } from "../llm/deepseek.js";
-import { SENNA_OPENERS } from "../prompts/senna.js";
+import {
+  classifyAndBuildAction,
+  continueActionDraft,
+  detectPageOnlyActionIntent,
+  detectQuickActionIntent,
+  getActionFollowUp,
+  getActionReadyReply,
+  buildOpenRoute,
+  startQuickAction,
+  suggestForDraftField,
+  updateCompletedActionDraft,
+} from "../actions/builder.js";
+import type { ActionDraft, ActionType } from "../actions/types.js";
+import { ACTION_TYPES } from "../actions/types.js";
+import {
+  appendChatMessage,
+  countSessionUserMessages,
+  createChatSession,
+  getLatestActionDraft,
+  getSessionMessages,
+  getOffTopicStrikes,
+  incrementOffTopicStrikes,
+  insertToolRun,
+  logChatError,
+  resetOffTopicStrikes,
+  saveActionDraft,
+  takeRateLimit,
+} from "../db.js";
+import {
+  guardActionDraft,
+  guardAssistantOutput,
+  guardUserMessage,
+  looksUnreadable,
+  stripSelfDescription,
+  stripVendorMentions,
+} from "../guardrails.js";
+import {
+  ChatLLMError,
+  generateAssistantAnswer,
+} from "../llm/deepseek.js";
+import {
+  SENNA_OPENERS,
+  SENNA_LLM_RECOVERY,
+  SENNA_LLM_UNAVAILABLE,
+  SENNA_TYPO_CLARIFY,
+  buildOffTopicConcisePromptBlock,
+} from "../prompts/senna.js";
 import { buildSystemPrompt } from "../prompts/system.js";
 import { retrieveDocContext } from "../retrieval/docs.js";
 import { buildExplorerTxUrl, buildStage0ContextBlock, extractTxHashFromText } from "../tools/stage0.js";
 import { config } from "../config.js";
+import { logger } from "../logger.js";
 
 const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -24,6 +66,7 @@ const requestSchema = z.object({
   walletAddress: z.string().optional(),
   evmAddress: z.string().optional(),
   chainId: z.coerce.number().int().positive().optional(),
+  quickAction: z.enum(ACTION_TYPES).optional(),
 });
 
 function buildRequesterKey(input: {
@@ -41,7 +84,9 @@ function buildRequesterKey(input: {
 }
 
 function cleanAssistantAnswer(answer: string) {
-  return stripSelfDescription(answer)
+  const stripped = stripSelfDescription(answer);
+  const noVendors = stripVendorMentions(stripped);
+  return noVendors
     .replace(/\s*[–—]\s*/g, ", ")
     .replace(/^\s*Source:.*$/gim, "")
     .replace(/^\s*https?:\/\/\S+\s*$/gim, "")
@@ -63,14 +108,254 @@ function buildInstantReply(message: string): string | null {
 
   if (/^(thanks|thank you|appreciate it|nice|cool)[.!?\s]*$/.test(normalized)) {
     return pickShortReply([
-      "Anytime.",
-      "You got it.",
-      "Easy pit stop.",
-      "Clean line.",
+      "Anytime, happy to help.",
+      "You got it. What else should we sort out?",
+      "Glad that helped.",
+      "Clean line. What should we tackle next?",
     ]);
   }
 
   return null;
+}
+
+const QUICK_ACTION_LABELS: Partial<Record<ActionType, string>> = {
+  create_token: "create a token",
+  lock_token: "lock tokens",
+  airdrop_tokens: "set up an airdrop",
+  buy_name: "register a .rise name",
+};
+
+function isAffirmativeConfirmation(message: string) {
+  return /^(yes|yeah|yep|yup|sure|correct|right|that'?s right|please|start|start it|go ahead|do it|sounds good|exactly)\b/i.test(
+    message.trim(),
+  );
+}
+
+function isNegativeConfirmation(message: string) {
+  return /^(no|nope|nah|cancel|stop|not that|never mind|nevermind)\b/i.test(message.trim());
+}
+
+function stripConfirmationPrefix(message: string) {
+  return message
+    .trim()
+    .replace(/^(yes|yeah|yep|yup|sure|correct|right|that'?s right|please|start|start it|go ahead|do it|sounds good|exactly)[,!.:\s]*/i, "")
+    .trim();
+}
+
+function actionDraftProgressed(blank: ActionDraft, next: ActionDraft) {
+  return next.missingFields.length < blank.missingFields.length;
+}
+
+function seedHasExplicitQuickActionDetails(actionType: ActionType, message: string) {
+  if (!message.trim()) return false;
+
+  if (actionType === "create_token") {
+    return /\b(?:called|named|name\s*(?:is|=|:)|symbol|ticker|supply|amount|decimals?|token\s*type|plain|mintable|burnable|taxable|non[-\s]?mintable|fixed\s+supply)\b/i.test(
+      message,
+    );
+  }
+
+  if (actionType === "lock_token") {
+    return /\b0x[a-fA-F0-9]{40}\b/.test(message) || /\b(?:amount|lock\s+\d|vest\s+\d|days?|duration|description|label|called|named)\b/i.test(message);
+  }
+
+  if (actionType === "airdrop_tokens") {
+    return /\b0x[a-fA-F0-9]{40}\b/.test(message) || /\b(?:native|eth|recipients?|airdrop\s+\d|send\s+\d)\b/i.test(message);
+  }
+
+  if (actionType === "buy_name") {
+    return /\.rise\b/i.test(message) || /\b(?:name|domain|rns)\s*(?:is|=|:)|\b(?:called|named)\s+/i.test(message);
+  }
+
+  return false;
+}
+
+async function getPendingQuickAction(sessionId: string): Promise<{ actionType: ActionType; seedMessage: string } | null> {
+  const recent = await getSessionMessages(sessionId, 12);
+  const latestAssistant = [...recent].reverse().find((message) => message.role === "assistant");
+  const meta = latestAssistant?.meta_json;
+  if (!meta || typeof meta !== "object") return null;
+
+  const pending = meta as { pendingQuickAction?: string; pendingUserMessage?: string };
+  if (!pending.pendingQuickAction) return null;
+  if (!ACTION_TYPES.includes(pending.pendingQuickAction as ActionType)) return null;
+
+  const actionType = pending.pendingQuickAction as ActionType;
+  if (!(actionType in QUICK_ACTION_LABELS)) return null;
+
+  return {
+    actionType,
+    seedMessage: pending.pendingUserMessage ?? "",
+  };
+}
+
+async function respondWithQuickActionConfirmation(input: {
+  sessionId: string;
+  actionType: ActionType;
+  userMessage: string;
+}) {
+  const label = QUICK_ACTION_LABELS[input.actionType] ?? "start this flow";
+  const answer = `Sounds like you want to ${label}. Should I start that flow?`;
+
+  await appendChatMessage({
+    sessionId: input.sessionId,
+    role: "assistant",
+    content: answer,
+    metaJson: {
+      pendingQuickAction: input.actionType,
+      pendingUserMessage: input.userMessage,
+    },
+  });
+
+  return {
+    blocked: false,
+    sessionId: input.sessionId,
+    answer,
+    citations: [] as string[],
+    actionDraft: null,
+    suggestions: ["Yes, start it", "No, cancel"],
+  };
+}
+
+function llmErrorToUserMessage(error: ChatLLMError): string {
+  switch (error.code) {
+    case "llm_empty_answer":
+      return pickShortReply(SENNA_LLM_RECOVERY);
+    case "llm_http_error":
+    case "llm_network_error":
+    case "llm_missing_key":
+      return pickShortReply(SENNA_LLM_UNAVAILABLE);
+    default:
+      return pickShortReply(SENNA_LLM_UNAVAILABLE);
+  }
+}
+
+function actionDraftToResponse(draft: ActionDraft) {
+  return {
+    actionType: draft.actionType,
+    targetRoute: draft.targetRoute,
+    requiredWallet: draft.requiredWallet,
+    requiredChain: draft.requiredChain,
+    prefill: draft.prefill,
+    summary: draft.summary,
+    warnings: draft.warnings,
+    missingFields: draft.missingFields,
+    nextSteps: draft.nextSteps,
+  };
+}
+
+function actionDraftFromStored(stored: NonNullable<Awaited<ReturnType<typeof getLatestActionDraft>>>): ActionDraft {
+  return {
+    actionType: stored.actionType as ActionType,
+    targetRoute: stored.route,
+    requiredWallet: (stored.requiredWallet as "evm" | null) ?? null,
+    requiredChain: (stored.requiredChain as "rise_testnet" | null) ?? null,
+    prefill: stored.prefill,
+    summary: stored.summary,
+    warnings: stored.warnings,
+    missingFields: stored.missingFields,
+    nextSteps: stored.nextSteps,
+  };
+}
+
+async function persistAndRespondDraft(args: {
+  sessionId: string;
+  draft: ActionDraft;
+  reply: string;
+  isReady: boolean;
+}) {
+  const { sessionId, draft, reply, isReady } = args;
+  const actionGuard = guardActionDraft(draft);
+  if (actionGuard.valid) {
+    await saveActionDraft({
+      sessionId,
+      actionType: draft.actionType,
+      route: draft.targetRoute,
+      requiredWallet: draft.requiredWallet ?? undefined,
+      requiredChain: draft.requiredChain ?? undefined,
+      prefillJson: draft.prefill,
+      summary: draft.summary,
+      warningsJson: draft.warnings,
+      missingFieldsJson: draft.missingFields,
+      nextStepsJson: draft.nextSteps,
+    });
+  }
+
+  await appendChatMessage({
+    sessionId,
+    role: "assistant",
+    content: reply,
+    metaJson: { actionType: draft.actionType, ready: isReady },
+  });
+
+  return {
+    blocked: false,
+    sessionId,
+    answer: reply,
+    citations: [] as string[],
+    actionDraft: isReady ? actionDraftToResponse(draft) : null,
+    suggestions: isReady ? [] : suggestForDraftField(draft),
+  };
+}
+
+async function buildPostTurnSuggestions(input: {
+  sessionId: string;
+  lastUserMessage: string;
+  lastAssistantAnswer: string;
+}): Promise<string[]> {
+  if (!config.deepseekApiKey) return [];
+  try {
+    const result = await generateAssistantAnswer({
+      message: input.lastUserMessage,
+      mode: "fast",
+      docChunkCount: 0,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You generate 1 to 3 very short follow-up prompts that the user might tap.",
+            "Each suggestion must be 5 words or fewer, no quotes, no trailing punctuation.",
+            "Suggestions must keep the user inside Stage0 topics (token, NFT, lock, airdrop, name, launch, dashboard, presale, wallet, RISE testnet).",
+            "Output STRICT JSON: an array of strings. No commentary.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: [
+            "Previous user message:",
+            input.lastUserMessage,
+            "",
+            "Senna's reply:",
+            input.lastAssistantAnswer,
+            "",
+            "Now produce the JSON array.",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    const text = result.answer.trim();
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+    const parsed = JSON.parse(match[0]) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.replace(/^["'\s]+|["'\s]+$/g, "").trim())
+      .filter((item) => item.length > 0 && item.length <= 36)
+      .slice(0, 3);
+  } catch (error) {
+    if (error instanceof ChatLLMError) {
+      await logChatError({
+        sessionId: input.sessionId,
+        scope: "suggestions",
+        code: error.code,
+        internalMessage: error.internalDetail,
+        httpStatus: error.httpStatus,
+      });
+    }
+    return [];
+  }
 }
 
 export async function registerChatRoutes(app: FastifyInstance) {
@@ -105,7 +390,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     if (rateWindow.hits > config.rateLimitMaxRequests) {
       return reply.code(429).send({
         error: "rate_limited",
-        detail: "Too many chat requests right now. Give Senna a few seconds and try again.",
+        detail: "Slow down for a few seconds and try again.",
       });
     }
 
@@ -118,6 +403,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
         sessionId: input.sessionId ?? null,
         citations: [],
         actionDraft: null,
+        suggestions: [],
       });
     }
 
@@ -139,17 +425,18 @@ export async function registerChatRoutes(app: FastifyInstance) {
         return reply.code(200).send({
           blocked: true,
           blockReason: "guest_limit_hard",
-          answer: "Guest cap reached. Connect a wallet to continue.",
+          answer: "Guest cap reached. Connect a wallet to keep going.",
           sessionId,
           citations: [],
           actionDraft: null,
+          suggestions: [],
         });
       }
 
       if (guestPromptCount >= softCapStart) {
         const softReply =
           guestPromptCount === softCapStart
-            ? "You've used your 5 guest prompts. Connect a wallet to keep chatting - your session is saved."
+            ? "You've hit the 5-prompt guest limit. Connect a wallet to keep chatting, your session is saved."
             : "Still in guest mode. Connect a wallet and we'll pick this back up.";
 
         await appendChatMessage({
@@ -170,6 +457,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
           sessionId,
           citations: [],
           actionDraft: null,
+          suggestions: [],
         });
       }
     }
@@ -180,6 +468,103 @@ export async function registerChatRoutes(app: FastifyInstance) {
       content: latestUserMessage.content,
     });
 
+    // Quick action short-circuit: user tapped a `/` shortcut.
+    if (input.quickAction) {
+      const blank = startQuickAction(input.quickAction);
+      if (blank) {
+        const merged = continueActionDraft(blank, latestUserMessage.content) ?? blank;
+        const isReady = merged.missingFields.length === 0;
+        const reply = isReady ? getActionReadyReply(merged) : getActionFollowUp(merged);
+        return persistAndRespondDraft({ sessionId, draft: merged, reply, isReady });
+      }
+    }
+
+    const pendingQuickAction = await getPendingQuickAction(sessionId);
+    if (pendingQuickAction) {
+      if (isNegativeConfirmation(latestUserMessage.content)) {
+        const answer = "No problem. What would you like to do instead?";
+        await appendChatMessage({
+          sessionId,
+          role: "assistant",
+          content: answer,
+          metaJson: { pendingQuickActionCleared: pendingQuickAction.actionType },
+        });
+        return {
+          blocked: false,
+          sessionId,
+          answer,
+          citations: [],
+          actionDraft: null,
+          suggestions: [],
+        };
+      }
+
+      const blank = startQuickAction(pendingQuickAction.actionType);
+      if (blank) {
+        const confirmed = isAffirmativeConfirmation(latestUserMessage.content);
+        const latestForMerge = confirmed
+          ? stripConfirmationPrefix(latestUserMessage.content)
+          : latestUserMessage.content;
+        const seed = confirmed && seedHasExplicitQuickActionDetails(pendingQuickAction.actionType, pendingQuickAction.seedMessage)
+          ? pendingQuickAction.seedMessage
+          : "";
+        const seedMessage = [seed, latestForMerge].filter(Boolean).join("\n");
+        const merged =
+          (seedMessage ? continueActionDraft(blank, seedMessage) : null) ??
+          (latestForMerge ? continueActionDraft(blank, latestForMerge) : null) ??
+          blank;
+
+        if (confirmed || actionDraftProgressed(blank, merged)) {
+          await resetOffTopicStrikes(sessionId);
+          const isReady = merged.missingFields.length === 0;
+          const responseReply = isReady ? getActionReadyReply(merged) : getActionFollowUp(merged);
+          return persistAndRespondDraft({ sessionId, draft: merged, reply: responseReply, isReady });
+        }
+      }
+
+      return respondWithQuickActionConfirmation({
+        sessionId,
+        actionType: pendingQuickAction.actionType,
+        userMessage: pendingQuickAction.seedMessage || latestUserMessage.content,
+      });
+    }
+
+    const pageOnlyAction = detectPageOnlyActionIntent(latestUserMessage.content);
+    if (pageOnlyAction) {
+      await resetOffTopicStrikes(sessionId);
+      const routeDraft = buildOpenRoute(pageOnlyAction.route, pageOnlyAction.summary);
+      return persistAndRespondDraft({
+        sessionId,
+        draft: routeDraft,
+        reply: pageOnlyAction.reply,
+        isReady: true,
+      });
+    }
+
+    const quickActionIntent = detectQuickActionIntent(latestUserMessage.content);
+    if (quickActionIntent) {
+      await resetOffTopicStrikes(sessionId);
+      return respondWithQuickActionConfirmation({
+        sessionId,
+        actionType: quickActionIntent,
+        userMessage: latestUserMessage.content,
+      });
+    }
+
+    // Friendly clarify on totally garbled input — saves an LLM call.
+    if (looksUnreadable(latestUserMessage.content)) {
+      const clarify = pickShortReply(SENNA_TYPO_CLARIFY);
+      await appendChatMessage({ sessionId, role: "assistant", content: clarify });
+      return {
+        blocked: false,
+        sessionId,
+        answer: clarify,
+        citations: [],
+        actionDraft: null,
+        suggestions: [],
+      };
+    }
+
     const instantReply = buildInstantReply(latestUserMessage.content);
     if (instantReply) {
       await appendChatMessage({
@@ -187,99 +572,114 @@ export async function registerChatRoutes(app: FastifyInstance) {
         role: "assistant",
         content: instantReply,
       });
-
+      await resetOffTopicStrikes(sessionId);
       return {
         blocked: false,
         sessionId,
         answer: instantReply,
         citations: [],
         actionDraft: null,
+        suggestions: [],
       };
     }
 
     // --- Rule-based action classification ---
-    const latestDraft = await getLatestActionDraft(sessionId);
-    let ruleAction: ActionDraft | null =
-      latestDraft && latestDraft.missingFields.length > 0
-        ? continueActionDraft(
-            {
-              actionType: latestDraft.actionType as ActionDraft["actionType"],
-              targetRoute: latestDraft.route,
-              requiredWallet: (latestDraft.requiredWallet as "evm" | null) ?? null,
-              requiredChain: (latestDraft.requiredChain as "rise_testnet" | null) ?? null,
-              prefill: latestDraft.prefill,
-              summary: latestDraft.summary,
-              warnings: latestDraft.warnings,
-              missingFields: latestDraft.missingFields,
-              nextSteps: latestDraft.nextSteps,
-            },
-            latestUserMessage.content,
-          )
-        : null;
+    const latestDraftRow = await getLatestActionDraft(sessionId);
+    let ruleAction: ActionDraft | null = null;
+    let updatedCompletedDraft = false;
+
+    if (latestDraftRow && latestDraftRow.missingFields.length > 0) {
+      const existing = actionDraftFromStored(latestDraftRow);
+      ruleAction = continueActionDraft(existing, latestUserMessage.content);
+    } else if (latestDraftRow) {
+      const existing = actionDraftFromStored(latestDraftRow);
+      ruleAction = updateCompletedActionDraft(existing, latestUserMessage.content);
+      updatedCompletedDraft = Boolean(ruleAction);
+    }
 
     if (!ruleAction) {
       ruleAction = classifyAndBuildAction(latestUserMessage.content);
     }
 
     if (ruleAction) {
-      const actionGuard = guardActionDraft(ruleAction);
-      if (actionGuard.valid) {
-        await saveActionDraft({
-          sessionId,
-          actionType: ruleAction.actionType,
-          route: ruleAction.targetRoute,
-          requiredWallet: ruleAction.requiredWallet ?? undefined,
-          requiredChain: ruleAction.requiredChain ?? undefined,
-          prefillJson: ruleAction.prefill,
-          summary: ruleAction.summary,
-          warningsJson: ruleAction.warnings,
-          missingFieldsJson: ruleAction.missingFields,
-          nextStepsJson: ruleAction.nextSteps,
-        });
-      }
+      await resetOffTopicStrikes(sessionId);
+      const isReady = ruleAction.missingFields.length === 0;
+      const responseReply = updatedCompletedDraft && isReady
+        ? "Updated. Take another look before signing."
+        : isReady
+          ? getActionReadyReply(ruleAction)
+          : getActionFollowUp(ruleAction);
+      return persistAndRespondDraft({ sessionId, draft: ruleAction, reply: responseReply, isReady });
+    }
 
-      if (ruleAction.missingFields.length > 0) {
-        const followUp = getActionFollowUp(ruleAction);
+    // --- Off-topic tiered redirect ---
+    if (guard.isOffTopic) {
+      const strikes = await incrementOffTopicStrikes(sessionId);
+      const strikeIndex = Math.max(0, strikes - 1);
+
+      try {
+        const offTopic = await generateAssistantAnswer({
+          message: latestUserMessage.content,
+          mode: "fast",
+          docChunkCount: 0,
+          forceComplex: false,
+          messages: [
+            { role: "system", content: buildSystemPrompt() },
+            { role: "system", content: buildOffTopicConcisePromptBlock(strikeIndex) },
+            { role: "user", content: latestUserMessage.content },
+          ],
+        });
+
+        const safeAnswer = cleanAssistantAnswer(offTopic.answer);
         await appendChatMessage({
           sessionId,
           role: "assistant",
-          content: followUp,
+          content: safeAnswer,
+          metaJson: { offTopic: true, strikeIndex },
         });
+
+        const suggestions =
+          strikeIndex >= 2
+            ? []
+            : await buildPostTurnSuggestions({
+                sessionId,
+                lastUserMessage: latestUserMessage.content,
+                lastAssistantAnswer: safeAnswer,
+              });
 
         return {
           blocked: false,
           sessionId,
-          answer: followUp,
+          answer: safeAnswer,
           citations: [],
           actionDraft: null,
+          suggestions,
+        };
+      } catch (error) {
+        if (error instanceof ChatLLMError) {
+          await logChatError({
+            sessionId,
+            scope: "off_topic",
+            code: error.code,
+            internalMessage: error.internalDetail,
+            httpStatus: error.httpStatus,
+          });
+          logger.error("Senna LLM call failed (off-topic path)", {
+            code: error.code,
+            httpStatus: error.httpStatus,
+          });
+        }
+        const fallback = llmErrorToUserMessage(error as ChatLLMError);
+        await appendChatMessage({ sessionId, role: "assistant", content: fallback });
+        return {
+          blocked: false,
+          sessionId,
+          answer: fallback,
+          citations: [],
+          actionDraft: null,
+          suggestions: [],
         };
       }
-
-      const actionReply = getActionReadyReply(ruleAction);
-      await appendChatMessage({
-        sessionId,
-        role: "assistant",
-        content: actionReply,
-        metaJson: { actionType: ruleAction.actionType },
-      });
-
-      return {
-        blocked: false,
-        sessionId,
-        answer: actionReply,
-        citations: [],
-        actionDraft: {
-          actionType: ruleAction.actionType,
-          targetRoute: ruleAction.targetRoute,
-          requiredWallet: ruleAction.requiredWallet,
-          requiredChain: ruleAction.requiredChain,
-          prefill: ruleAction.prefill,
-          summary: ruleAction.summary,
-          warnings: ruleAction.warnings,
-          missingFields: ruleAction.missingFields,
-          nextSteps: ruleAction.nextSteps,
-        },
-      };
     }
 
     // --- Retrieval ---
@@ -327,7 +727,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       : "No RISE transaction hash was detected in this message.";
 
     try {
-      const completion = await generateDeepSeekAnswer({
+      const completion = await generateAssistantAnswer({
         message: latestUserMessage.content,
         mode: input.mode,
         docChunkCount: retrieval.chunks.length,
@@ -343,30 +743,76 @@ export async function registerChatRoutes(app: FastifyInstance) {
       const outputGuard = guardAssistantOutput(completion.answer);
       const safeAnswer = outputGuard.valid
         ? cleanAssistantAnswer(completion.answer)
-        : "I can help with Stage0 usage, RISE setup, launch support, and action drafts, but I'm not going into internal or sensitive details.";
+        : "I can help with Stage0 usage, RISE setup, launches, NFTs, tokens, locks, airdrops, and names. I'll stay out of internal details.";
 
       await appendChatMessage({
         sessionId,
         role: "assistant",
         content: safeAnswer,
         citationsJson: retrieval.citations,
-        metaJson: { model: completion.model },
+        metaJson: { ok: true },
+      });
+
+      await resetOffTopicStrikes(sessionId);
+
+      const suggestions = await buildPostTurnSuggestions({
+        sessionId,
+        lastUserMessage: latestUserMessage.content,
+        lastAssistantAnswer: safeAnswer,
       });
 
       return {
         blocked: false,
         sessionId,
-        model: completion.model,
         answer: safeAnswer,
         citations: retrieval.citations,
         actionDraft: null,
+        suggestions,
       };
     } catch (error) {
-      return reply.code(503).send({
-        error: "chat_unavailable",
+      if (error instanceof ChatLLMError) {
+        await logChatError({
+          sessionId,
+          scope: "chat",
+          code: error.code,
+          internalMessage: error.internalDetail,
+          httpStatus: error.httpStatus,
+        });
+        logger.error("Senna LLM call failed", {
+          code: error.code,
+          httpStatus: error.httpStatus,
+        });
+        const userMessage = llmErrorToUserMessage(error);
+        await appendChatMessage({ sessionId, role: "assistant", content: userMessage });
+        return {
+          blocked: false,
+          sessionId,
+          answer: userMessage,
+          citations: [],
+          actionDraft: null,
+          suggestions: [],
+        };
+      }
+
+      await logChatError({
         sessionId,
-        detail: error instanceof Error ? error.message : String(error),
+        scope: "chat",
+        code: "unknown_error",
+        internalMessage: error instanceof Error ? error.message : String(error),
       });
+      logger.error("Senna chat path threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const fallback = pickShortReply(SENNA_LLM_UNAVAILABLE);
+      await appendChatMessage({ sessionId, role: "assistant", content: fallback });
+      return {
+        blocked: false,
+        sessionId,
+        answer: fallback,
+        citations: [],
+        actionDraft: null,
+        suggestions: [],
+      };
     }
   });
 }

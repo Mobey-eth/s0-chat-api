@@ -7,6 +7,7 @@ import { logger } from "./logger.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerImageRoutes } from "./routes/images.js";
+import { registerVoiceRoutes } from "./routes/voice.js";
 
 const app = Fastify({
   logger: false,
@@ -26,6 +27,7 @@ await app.register(multipart, {
 await registerHealthRoutes(app);
 await registerImageRoutes(app);
 await registerChatRoutes(app);
+await registerVoiceRoutes(app);
 
 app.setErrorHandler((error, _request, reply) => {
   logger.error("Unhandled chat API error", {
