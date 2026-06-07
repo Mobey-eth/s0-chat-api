@@ -9,9 +9,15 @@ export interface Stage0ContractAddresses {
   airdropMultisender: string;
 }
 
+export interface Stage0SupportLinks {
+  x: string;
+  discord: string;
+}
+
 export interface Stage0Facts {
   appUrl: string;
   docsUrl: string;
+  supportLinks: Stage0SupportLinks;
   networkName: string;
   chainId: number;
   rpcUrl: string;
@@ -37,6 +43,10 @@ export function getStage0Facts(): Stage0Facts {
   return {
     appUrl: config.stage0AppUrl,
     docsUrl: config.docsBaseUrl,
+    supportLinks: {
+      x: config.stage0XUrl,
+      discord: config.stage0DiscordUrl,
+    },
     networkName: "RISE Testnet",
     chainId: config.riseTestnetChainId,
     rpcUrl: config.riseTestnetRpcUrl,
@@ -89,6 +99,8 @@ export function buildStage0ContextBlock(): string {
     "Stage0 and RISE context (do not fabricate different values):",
     `Stage0 app: ${facts.appUrl}`,
     `Stage0 docs: ${facts.docsUrl}`,
+    `Stage0 X/support: ${facts.supportLinks.x}`,
+    `Stage0 Discord/support: ${facts.supportLinks.discord}`,
     `Network: ${facts.networkName}`,
     `Chain ID: ${facts.chainId}`,
     `RPC URL: ${facts.rpcUrl}`,
@@ -106,5 +118,5 @@ export function buildStage0ContextBlock(): string {
     `Presale factory: ${facts.contracts.presaleFactory}`,
     `Token locker: ${facts.contracts.tokenLocker}`,
     `Airdrop multisender: ${facts.contracts.airdropMultisender}`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
