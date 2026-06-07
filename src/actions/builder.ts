@@ -485,7 +485,9 @@ export function detectPageOnlyActionIntent(message: string): { route: string; re
   const lower = stripLeadingInterjections(message.trim().toLowerCase());
   if (/^(how|what|where|when|why|is|are|do|does|did)\b/.test(lower)) return null;
 
-  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:my\s+)?dashboard/i.test(lower)) {
+  const routeVerb = "(?:go\\s+to|open|show|show\\s+me|navigate|take\\s+me\\s+to|check|view|see|look\\s+at|pull\\s+up)";
+
+  if (new RegExp(`${routeVerb}\\s+(?:my\\s+)?dashboard`, "i").test(lower)) {
     return {
       route: DASHBOARD_ROUTE,
       reply: "Opening your dashboard.",
@@ -493,7 +495,7 @@ export function detectPageOnlyActionIntent(message: string): { route: string; re
     };
   }
 
-  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:the\s+)?(?:launchpad|presales?)/i.test(lower)) {
+  if (new RegExp(`${routeVerb}\\s+(?:the\\s+)?(?:launchpad|presales?)`, "i").test(lower)) {
     return {
       route: LAUNCHPAD_ROUTE,
       reply: "Opening the launchpad.",
@@ -501,7 +503,7 @@ export function detectPageOnlyActionIntent(message: string): { route: string; re
     };
   }
 
-  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:my\s+)?(?:nfts?|collectibles|portfolio)/i.test(lower)) {
+  if (new RegExp(`${routeVerb}\\s+(?:my\\s+)?(?:nfts?|collectibles|portfolio)`, "i").test(lower)) {
     return {
       route: "/my-nfts",
       reply: "Opening your collectibles.",
@@ -509,7 +511,7 @@ export function detectPageOnlyActionIntent(message: string): { route: string; re
     };
   }
 
-  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:the\s+)?tools/i.test(lower)) {
+  if (new RegExp(`${routeVerb}\\s+(?:the\\s+)?tools`, "i").test(lower)) {
     return {
       route: TOOLS_ROUTE,
       reply: "Opening tools.",
@@ -517,7 +519,7 @@ export function detectPageOnlyActionIntent(message: string): { route: string; re
     };
   }
 
-  if (/(?:go\s+to|open|show|show\s+me|navigate|take\s+me\s+to)\s+(?:the\s+)?(?:domains|names)(?:\s+page)?/i.test(lower)) {
+  if (new RegExp(`${routeVerb}\\s+(?:the\\s+)?(?:domains|names)(?:\\s+page)?`, "i").test(lower)) {
     return {
       route: DOMAINS_ROUTE,
       reply: "Opening names.",
@@ -775,11 +777,11 @@ export function buildOpenDashboard(): ActionDraft {
   });
 }
 
-export function buildOpenRoute(route: string, summary?: string): ActionDraft {
+export function buildOpenRoute(route: string, summary?: string, options?: { requiredWallet?: "evm" | null }): ActionDraft {
   return ensure({
     actionType: "open_route",
     targetRoute: route,
-    requiredWallet: null,
+    requiredWallet: options?.requiredWallet ?? null,
     requiredChain: null,
     prefill: {},
     summary: summary ?? `Navigate to ${route}.`,

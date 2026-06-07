@@ -8,6 +8,7 @@ import {
   detectQuickActionIntent,
   getActionFollowUp,
   getActionReadyReply,
+  buildOpenDashboard,
   buildOpenRoute,
   startQuickAction,
   suggestForDraftField,
@@ -217,6 +218,36 @@ async function respondWithQuickActionConfirmation(input: {
   };
 }
 
+async function respondWithWalletRequiredForAction(input: {
+  sessionId: string;
+  actionType?: ActionType;
+}) {
+  const label = input.actionType ? QUICK_ACTION_LABELS[input.actionType] : null;
+  const answer = label
+    ? `Connect your wallet first, then I can help you ${label} and prepare the signing step.`
+    : "Connect your wallet first, then I can prepare that action for signing.";
+
+  await appendChatMessage({
+    sessionId: input.sessionId,
+    role: "assistant",
+    content: answer,
+    metaJson: {
+      walletRequired: true,
+      actionType: input.actionType,
+    },
+  });
+
+  return {
+    blocked: true,
+    blockReason: "wallet_required",
+    sessionId: input.sessionId,
+    answer,
+    citations: [] as string[],
+    actionDraft: null,
+    suggestions: [] as string[],
+  };
+}
+
 function llmErrorToUserMessage(error: ChatLLMError): string {
   switch (error.code) {
     case "llm_empty_answer":
@@ -256,6 +287,47 @@ function actionDraftFromStored(stored: NonNullable<Awaited<ReturnType<typeof get
     missingFields: stored.missingFields,
     nextSteps: stored.nextSteps,
   };
+}
+
+function walletStateBlock(input: { hasConnectedWallet: boolean; evmAddress?: string; walletAddress?: string; chainId?: number }) {
+  if (!input.hasConnectedWallet) {
+    return "Wallet state: no wallet address was sent with this chat request. For wallet-specific sections, tell the user to connect a wallet to load personalized data.";
+  }
+
+  const address = input.evmAddress ?? input.walletAddress ?? "connected";
+  return [
+    `Wallet state: connected wallet ${address}.`,
+    input.chainId ? `Connected chain ID: ${input.chainId}.` : "Connected chain ID was not sent.",
+    "Do not tell the user to connect a wallet unless a wallet-gated action specifically fails.",
+  ].join("\n");
+}
+
+function buildRouteDraft(route: string, summary: string) {
+  if (route === "/dashboard") return buildOpenDashboard();
+  if (route === "/my-nfts" || route === "/tokens") return buildOpenRoute(route, summary, { requiredWallet: "evm" });
+  return buildOpenRoute(route, summary);
+}
+
+function getRouteReply(input: { route: string; fallback: string; hasConnectedWallet: boolean }) {
+  if (input.route === "/dashboard") {
+    return input.hasConnectedWallet
+      ? "Opening your dashboard."
+      : "Dashboard needs your wallet to load your activity. Use the button below, then connect.";
+  }
+
+  if (input.route === "/my-nfts") {
+    return input.hasConnectedWallet
+      ? "Opening your collectibles."
+      : "Collectibles need your wallet to load holdings. Use the button below, then connect.";
+  }
+
+  if (input.route === "/tokens") {
+    return input.hasConnectedWallet
+      ? "Opening your tokens."
+      : "Tokens need your wallet to load your assets. Use the button below, then connect.";
+  }
+
+  return input.fallback;
 }
 
 async function persistAndRespondDraft(args: {
@@ -470,6 +542,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
     // Quick action short-circuit: user tapped a `/` shortcut.
     if (input.quickAction) {
+      if (!hasConnectedWallet) {
+        return respondWithWalletRequiredForAction({ sessionId, actionType: input.quickAction });
+      }
+
       const blank = startQuickAction(input.quickAction);
       if (blank) {
         const merged = continueActionDraft(blank, latestUserMessage.content) ?? blank;
@@ -497,6 +573,13 @@ export async function registerChatRoutes(app: FastifyInstance) {
           actionDraft: null,
           suggestions: [],
         };
+      }
+
+      if (!hasConnectedWallet) {
+        return respondWithWalletRequiredForAction({
+          sessionId,
+          actionType: pendingQuickAction.actionType,
+        });
       }
 
       const blank = startQuickAction(pendingQuickAction.actionType);
@@ -532,11 +615,15 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const pageOnlyAction = detectPageOnlyActionIntent(latestUserMessage.content);
     if (pageOnlyAction) {
       await resetOffTopicStrikes(sessionId);
-      const routeDraft = buildOpenRoute(pageOnlyAction.route, pageOnlyAction.summary);
+      const routeDraft = buildRouteDraft(pageOnlyAction.route, pageOnlyAction.summary);
       return persistAndRespondDraft({
         sessionId,
         draft: routeDraft,
-        reply: pageOnlyAction.reply,
+        reply: getRouteReply({
+          route: pageOnlyAction.route,
+          fallback: pageOnlyAction.reply,
+          hasConnectedWallet,
+        }),
         isReady: true,
       });
     }
@@ -544,6 +631,13 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const quickActionIntent = detectQuickActionIntent(latestUserMessage.content);
     if (quickActionIntent) {
       await resetOffTopicStrikes(sessionId);
+      if (!hasConnectedWallet) {
+        return respondWithWalletRequiredForAction({
+          sessionId,
+          actionType: quickActionIntent,
+        });
+      }
+
       return respondWithQuickActionConfirmation({
         sessionId,
         actionType: quickActionIntent,
@@ -603,6 +697,13 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
     if (ruleAction) {
       await resetOffTopicStrikes(sessionId);
+      if (!hasConnectedWallet && ruleAction.requiredWallet) {
+        return respondWithWalletRequiredForAction({
+          sessionId,
+          actionType: ruleAction.actionType,
+        });
+      }
+
       const isReady = ruleAction.missingFields.length === 0;
       const responseReply = updatedCompletedDraft && isReady
         ? "Updated. Take another look before signing."
@@ -725,6 +826,12 @@ export async function registerChatRoutes(app: FastifyInstance) {
           "Only provide this explorer link unless a later tool adds live transaction status.",
         ].join("\n")
       : "No RISE transaction hash was detected in this message.";
+    const walletContextBlock = walletStateBlock({
+      hasConnectedWallet,
+      evmAddress: input.evmAddress,
+      walletAddress: input.walletAddress,
+      chainId: input.chainId,
+    });
 
     try {
       const completion = await generateAssistantAnswer({
@@ -734,6 +841,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
         messages: [
           { role: "system", content: buildSystemPrompt() },
           { role: "system", content: stage0Block },
+          { role: "system", content: walletContextBlock },
           { role: "system", content: txContextBlock },
           { role: "system", content: docContextBlock },
           ...input.messages,
