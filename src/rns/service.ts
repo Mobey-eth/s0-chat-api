@@ -647,7 +647,15 @@ export async function getRnsIndexHealth() {
   return {
     chainId: config.riseTestnetChainId,
     namesIndexed: nameCount,
-    jobs: states,
+    jobs: states.map((state) => ({
+      jobName: state.jobName,
+      chainId: state.chainId,
+      contractAddress: state.contractAddress,
+      lastProcessedBlock: state.lastProcessedBlock.toString(),
+      lastProcessedBlockHash: state.lastProcessedBlockHash,
+      lastProcessedAt: state.lastProcessedAt,
+      updatedAt: state.updatedAt,
+    })),
   };
 }
 
