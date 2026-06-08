@@ -1,4 +1,9 @@
-export const IPFS_GATEWAY = "https://ipfs.io/ipfs/";
+export const IPFS_GATEWAYS = [
+  "https://ipfs.io/ipfs/",
+  "https://dweb.link/ipfs/",
+  "https://gateway.pinata.cloud/ipfs/",
+] as const;
+export const IPFS_GATEWAY = IPFS_GATEWAYS[0];
 const CONTRACT_METADATA_FILENAMES = ["contract.json", "collection.json", "metadata.json"] as const;
 
 function stripQueryAndHash(value: string): string {
@@ -93,6 +98,18 @@ export function contractUriToHttp(raw: string): string {
   return ipfsPath ? `${IPFS_GATEWAY}${ipfsPath}` : "";
 }
 
+export function contractUriToHttpCandidates(raw: string): string[] {
+  const normalized = stripQueryAndHash(raw.trim());
+  if (!normalized) return [];
+
+  if (/^https?:\/\//i.test(normalized)) {
+    return [normalized];
+  }
+
+  const ipfsPath = extractIpfsPath(normalized);
+  return ipfsPath ? IPFS_GATEWAYS.map((gateway) => `${gateway}${ipfsPath}`) : [];
+}
+
 export function ipfsUriToHttp(raw: string): string {
   const normalized = raw.trim();
   if (!normalized) return "";
@@ -105,31 +122,48 @@ export function ipfsUriToHttp(raw: string): string {
   return path ? `${IPFS_GATEWAY}${path}` : normalized;
 }
 
+export function ipfsUriToHttpCandidates(raw: string): string[] {
+  const normalized = raw.trim();
+  if (!normalized) return [];
+
+  if (/^https?:\/\//i.test(normalized)) {
+    return [normalized];
+  }
+
+  const path = extractIpfsPath(normalized);
+  return path ? IPFS_GATEWAYS.map((gateway) => `${gateway}${path}`) : [normalized];
+}
+
 function looksLikeJsonPath(pathname: string): boolean {
   return /\.json$/i.test(pathname.replace(/\/+$/, ""));
 }
 
 export function getContractMetadataCandidateUrls(raw: string): string[] {
-  const base = contractUriToHttp(raw).replace(/\/+$/, "");
-  if (!base) return [];
+  const bases = contractUriToHttpCandidates(raw)
+    .map((value) => value.replace(/\/+$/, ""))
+    .filter(Boolean);
+  if (bases.length === 0) return [];
 
-  const candidates = [base];
+  const candidates: string[] = [];
 
-  try {
-    const url = new URL(base);
-    if (!looksLikeJsonPath(url.pathname)) {
-      for (const filename of CONTRACT_METADATA_FILENAMES) {
-        candidates.push(`${base}/${filename}`);
+  for (const base of bases) {
+    candidates.push(base);
+
+    try {
+      const url = new URL(base);
+      if (!looksLikeJsonPath(url.pathname)) {
+        for (const filename of CONTRACT_METADATA_FILENAMES) {
+          candidates.push(`${base}/${filename}`);
+        }
       }
-    }
-  } catch {
-    if (!looksLikeJsonPath(base)) {
-      for (const filename of CONTRACT_METADATA_FILENAMES) {
-        candidates.push(`${base}/${filename}`);
+    } catch {
+      if (!looksLikeJsonPath(base)) {
+        for (const filename of CONTRACT_METADATA_FILENAMES) {
+          candidates.push(`${base}/${filename}`);
+        }
       }
     }
   }
 
   return Array.from(new Set(candidates));
 }
-

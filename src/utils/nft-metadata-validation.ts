@@ -1,6 +1,6 @@
 import {
   getContractMetadataCandidateUrls,
-  ipfsUriToHttp,
+  ipfsUriToHttpCandidates,
   normalizeBaseURI,
   normalizeContractURI,
 } from "./ipfs.js";
@@ -61,17 +61,20 @@ function addJsonFallback(candidates: string[], url: string) {
 }
 
 function getTokenMetadataCandidateUrls(baseUri: string, tokenId: number): string[] {
-  const base = ipfsUriToHttp(baseUri).trim();
-  if (!base) return [];
-
   const candidates: string[] = [];
-  const trimmedBase = base.replace(/\/+$/, "");
-  addJsonFallback(candidates, `${trimmedBase}/${tokenId}`);
 
-  if (base.endsWith("/")) {
-    addJsonFallback(candidates, `${base}${tokenId}`);
-  } else {
-    addJsonFallback(candidates, `${base}${tokenId}`);
+  for (const base of ipfsUriToHttpCandidates(baseUri)) {
+    const normalizedBase = base.trim();
+    if (!normalizedBase) continue;
+
+    const trimmedBase = normalizedBase.replace(/\/+$/, "");
+    addJsonFallback(candidates, `${trimmedBase}/${tokenId}`);
+
+    if (normalizedBase.endsWith("/")) {
+      addJsonFallback(candidates, `${normalizedBase}${tokenId}`);
+    } else {
+      addJsonFallback(candidates, `${normalizedBase}${tokenId}`);
+    }
   }
 
   return Array.from(new Set(candidates));
@@ -186,4 +189,3 @@ export async function validateNFTMetadataUris(input: {
     warnings,
   };
 }
-
