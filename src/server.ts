@@ -8,6 +8,7 @@ import { registerChatRoutes } from "./routes/chat.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerNftMetadataRoutes } from "./routes/nft-metadata.js";
+import { registerPublicRnsRoutes } from "./routes/public-rns.js";
 import { registerRnsRoutes } from "./routes/rns.js";
 import { registerVoiceRoutes } from "./routes/voice.js";
 import { startRnsJobs } from "./rns/service.js";
@@ -30,6 +31,7 @@ await app.register(multipart, {
 await registerHealthRoutes(app);
 await registerImageRoutes(app);
 await registerNftMetadataRoutes(app);
+await registerPublicRnsRoutes(app);
 await registerRnsRoutes(app);
 await registerChatRoutes(app);
 await registerVoiceRoutes(app);
