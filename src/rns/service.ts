@@ -4,6 +4,7 @@ import { pool } from "../db.js";
 import { logger } from "../logger.js";
 import { config } from "../config.js";
 import {
+  notifyAuctionEndedLifecycle,
   notifyAdminRnsMarketplaceActivity,
   notifyAdminRnsRegistration,
   notifyMarketplaceSubscribers,
@@ -27,6 +28,7 @@ import {
   applyRnsResolverUpdate,
   getRnsMarketplaceAuctionById,
   getRnsMarketplaceAuctions,
+  getRnsEndedAuctionsForLifecycle,
   getRnsMarketplaceEvents,
   getRnsMarketplaceListingById,
   getRnsMarketplaceListings,
@@ -129,6 +131,10 @@ const marketplaceEvents = {
     "event SecondaryAuctionSettled(uint256 indexed auctionId,address indexed winner,uint256 amount)",
   ),
   withdrawal: parseAbiItem("event Withdrawal(address indexed account,uint256 amount)"),
+  proceedsAvailable: parseAbiItem(
+    "event ProceedsAvailable(uint256 indexed entityId,bool indexed isAuction,address indexed account,uint256 amount)",
+  ),
+  proceedsWithdrawal: parseAbiItem("event ProceedsWithdrawal(address indexed account,uint256 amount)"),
 } as const;
 
 const registryReadAbi = parseAbi([
@@ -187,6 +193,7 @@ const blockTimeCache = new Map<bigint, Promise<Date>>();
 let syncPromise: Promise<void> | null = null;
 let reconcilePromise: Promise<void> | null = null;
 let marketplaceSnapshotPromise: Promise<void> | null = null;
+let auctionLifecyclePromise: Promise<void> | null = null;
 let contractConfigurationPromise: Promise<void> | null = null;
 let marketplaceSnapshotAt = 0;
 let jobsStarted = false;
@@ -1218,7 +1225,8 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
       if (entry.kind === "settled") {
         const args = (log as (typeof settled)[number]).args;
         const auctionId = args.auctionId as bigint;
-        const winner = toLowerHex(args.winner as `0x${string}`) as `0x${string}`;
+        const winnerAddress = toLowerHex(args.winner as `0x${string}`) as `0x${string}`;
+        const winner = winnerAddress === ZERO_ADDRESS ? null : winnerAddress;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         await applyRnsPrimaryAuctionSettled(db, {
           chainId: config.riseTestnetChainId,
@@ -1334,6 +1342,8 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
     secondaryAuctionCancelled,
     secondaryAuctionSettled,
     withdrawals,
+    proceedsAvailable,
+    proceedsWithdrawals,
   ] = await Promise.all([
     client.getLogs({
       address: config.rnsContracts.marketplace as `0x${string}`,
@@ -1389,6 +1399,18 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
       fromBlock,
       toBlock,
     }),
+    client.getLogs({
+      address: config.rnsContracts.marketplace as `0x${string}`,
+      event: marketplaceEvents.proceedsAvailable,
+      fromBlock,
+      toBlock,
+    }),
+    client.getLogs({
+      address: config.rnsContracts.marketplace as `0x${string}`,
+      event: marketplaceEvents.proceedsWithdrawal,
+      fromBlock,
+      toBlock,
+    }),
   ]);
 
   const logs = [
@@ -1401,6 +1423,8 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
     ...secondaryAuctionCancelled.map((log) => ({ kind: "auction_cancelled" as const, log })),
     ...secondaryAuctionSettled.map((log) => ({ kind: "auction_settled" as const, log })),
     ...withdrawals.map((log) => ({ kind: "withdrawal" as const, log })),
+    ...proceedsAvailable.map((log) => ({ kind: "proceeds_available" as const, log })),
+    ...proceedsWithdrawals.map((log) => ({ kind: "proceeds_withdrawal" as const, log })),
   ].sort((a, b) => compareLogs(a.log, b.log));
 
   if (logs.length === 0) return;
@@ -1850,7 +1874,8 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
       if (entry.kind === "auction_settled") {
         const args = (log as (typeof secondaryAuctionSettled)[number]).args;
         const auctionId = args.auctionId as bigint;
-        const winner = toLowerHex(args.winner as `0x${string}`) as `0x${string}`;
+        const winnerAddress = toLowerHex(args.winner as `0x${string}`) as `0x${string}`;
+        const winner = winnerAddress === ZERO_ADDRESS ? null : winnerAddress;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         await applyRnsMarketplaceAuctionSettled(db, {
           chainId: config.riseTestnetChainId,
@@ -1910,6 +1935,48 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
             logIndex: log.logIndex,
           });
         }
+        continue;
+      }
+
+      if (entry.kind === "proceeds_available") {
+        const args = (log as (typeof proceedsAvailable)[number]).args;
+        const entityId = args.entityId as bigint;
+        const account = toLowerHex(args.account as `0x${string}`) as `0x${string}`;
+        const amount = (args.amount as bigint | undefined) ?? 0n;
+        const isAuction = Boolean(args.isAuction);
+        await recordRnsMarketplaceEvent(db, {
+          chainId: config.riseTestnetChainId,
+          source: "marketplace",
+          entityType: isAuction ? "auction_proceeds" : "listing_proceeds",
+          eventType: "marketplace.proceeds_available",
+          entityId,
+          account,
+          amount,
+          txHash: log.transactionHash,
+          blockNumber: log.blockNumber,
+          logIndex: log.logIndex,
+          blockTime,
+          payload: { isAuction },
+        });
+        continue;
+      }
+
+      if (entry.kind === "proceeds_withdrawal") {
+        const args = (log as (typeof proceedsWithdrawals)[number]).args;
+        const account = toLowerHex(args.account as `0x${string}`) as `0x${string}`;
+        const amount = (args.amount as bigint | undefined) ?? 0n;
+        await recordRnsMarketplaceEvent(db, {
+          chainId: config.riseTestnetChainId,
+          source: "marketplace",
+          entityType: "proceeds_withdrawal",
+          eventType: "marketplace.proceeds_withdrawal",
+          account,
+          amount,
+          txHash: log.transactionHash,
+          blockNumber: log.blockNumber,
+          logIndex: log.logIndex,
+          blockTime,
+        });
         continue;
       }
 
@@ -2328,6 +2395,50 @@ export async function ensureRnsIndexFresh(
   }
 }
 
+async function runRnsAuctionLifecycleNotifications(reason: string) {
+  await ensureRnsMarketplaceSnapshot(`auction-lifecycle-${reason}`);
+  const endedAuctions = await getRnsEndedAuctionsForLifecycle({
+    chainId: config.riseTestnetChainId,
+    nowUnix: BigInt(Math.floor(Date.now() / 1000)),
+  });
+
+  for (const auction of endedAuctions) {
+    const node = auction.node ?? computeRnsNode(auction.name);
+    if (!node) continue;
+    await safelyNotify(`${auction.source}-ended-${auction.auctionId}`, () =>
+      notifyAuctionEndedLifecycle({
+        chainId: auction.chainId,
+        source: auction.source,
+        auctionId: auction.auctionId,
+        name: auction.name,
+        fqdn: auction.fqdn,
+        node,
+        seller: auction.seller,
+        highestBidder: auction.highestBidder,
+        highestBid: auction.highestBid,
+        bidCount: auction.bidCount,
+        endTime: auction.endTime,
+      }),
+    );
+  }
+
+  if (endedAuctions.length > 0) {
+    logger.info("RNS auction lifecycle check complete", {
+      reason,
+      endedAuctions: endedAuctions.length,
+    });
+  }
+}
+
+export function ensureRnsAuctionLifecycleNotifications(reason = "manual") {
+  if (!auctionLifecyclePromise) {
+    auctionLifecyclePromise = runRnsAuctionLifecycleNotifications(reason).finally(() => {
+      auctionLifecyclePromise = null;
+    });
+  }
+  return auctionLifecyclePromise;
+}
+
 function refreshRnsIndexInBackground(
   reason = "request",
   jobNames: readonly JobName[] = DEFAULT_JOB_ORDER,
@@ -2363,6 +2474,12 @@ export function startRnsJobs() {
     });
   });
 
+  void ensureRnsAuctionLifecycleNotifications("startup").catch((error) => {
+    logger.warn("RNS startup auction lifecycle check did not complete", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
   const syncTimer = setInterval(() => {
     void ensureRnsSync("interval").catch((error) => {
       logger.warn("RNS interval sync did not complete", {
@@ -2380,6 +2497,15 @@ export function startRnsJobs() {
     });
   }, 30_000);
   marketplaceSnapshotTimer.unref?.();
+
+  const auctionLifecycleTimer = setInterval(() => {
+    void ensureRnsAuctionLifecycleNotifications("interval").catch((error) => {
+      logger.warn("RNS auction lifecycle check did not complete", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, config.rnsAuctionLifecycleIntervalSeconds * 1000);
+  auctionLifecycleTimer.unref?.();
 
   const reconcileTimer = setInterval(() => {
     void ensureRnsReconciliation("interval");

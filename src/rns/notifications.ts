@@ -3,7 +3,10 @@ import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { getEthUsdPrice } from "./pricing.js";
 import {
+  claimRnsAuctionLifecycleDispatch,
   claimRnsNotificationDispatch,
+  completeRnsAuctionLifecycleDispatch,
+  failRnsAuctionLifecycleDispatch,
   getRnsMarketplaceBidderSubscriptions,
   getRnsMarketplaceSellerSubscriptions,
   getRnsMarketplaceWatcherSubscriptions,
@@ -56,6 +59,20 @@ type MarketplaceSubscriberActivity = {
   winner?: `0x${string}` | null;
   txHash: `0x${string}`;
   logIndex: number;
+};
+
+export type AuctionEndedLifecycleActivity = {
+  chainId: number;
+  source: "primary_auction" | "marketplace";
+  auctionId: bigint;
+  name: string;
+  fqdn: string;
+  node: `0x${string}`;
+  seller: `0x${string}` | null;
+  highestBidder: `0x${string}` | null;
+  highestBid: bigint;
+  bidCount: number;
+  endTime: bigint;
 };
 
 function shortAddress(address: string | null | undefined) {
@@ -216,10 +233,12 @@ async function maybeSendSubscriptionEmail(
     title: string;
     intro: string;
     bullets: string[];
-    txHash: `0x${string}`;
-    logIndex: number;
+    txHash?: `0x${string}`;
+    logIndex?: number;
     eventSource?: string;
     eventType?: string;
+    ctaLabel?: string;
+    ctaHref?: string;
   },
 ) {
   if (!config.resendApiKey) return;
@@ -243,15 +262,249 @@ async function maybeSendSubscriptionEmail(
         title: input.title,
         intro: input.intro,
         bullets: input.bullets,
-        ctaLabel: "Open marketplace",
-        ctaHref: `${config.stage0AppUrl}/domains/marketplace`,
-        txHref: `${config.riseTestnetExplorerUrl}/tx/${input.txHash}`,
+        ctaLabel: input.ctaLabel ?? "Open marketplace",
+        ctaHref: input.ctaHref ?? `${config.stage0AppUrl}/domains/marketplace`,
+        txHref: input.txHash ? `${config.riseTestnetExplorerUrl}/tx/${input.txHash}` : undefined,
       }),
     });
   } catch (error) {
     await releaseRnsNotificationDispatch(dispatchKey);
     throw error;
   }
+}
+
+async function sendAuctionLifecycleEmail(
+  subscription: RnsNotificationSubscription,
+  dispatchKey: string,
+  input: {
+    chainId: number;
+    eventType: string;
+    subject: string;
+    title: string;
+    intro: string;
+    bullets: string[];
+    ctaLabel: string;
+    detail: unknown;
+  },
+) {
+  if (!config.resendApiKey) return;
+
+  const attemptCount = await claimRnsAuctionLifecycleDispatch({
+    dispatchKey,
+    chainId: input.chainId,
+    channel: "email",
+    subscriptionId: subscription.id,
+    eventType: input.eventType,
+    recipient: subscription.email,
+    detail: input.detail,
+  });
+  if (!attemptCount) return;
+
+  try {
+    await sendEmail({
+      to: subscription.email,
+      subject: input.subject,
+      html: emailShell({
+        title: input.title,
+        intro: input.intro,
+        bullets: input.bullets,
+        ctaLabel: input.ctaLabel,
+        ctaHref: `${config.stage0AppUrl}/domains/marketplace`,
+      }),
+    });
+    await completeRnsAuctionLifecycleDispatch(dispatchKey);
+  } catch (error) {
+    await failRnsAuctionLifecycleDispatch({
+      dispatchKey,
+      attemptCount,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+async function sendAuctionLifecycleSlack(activity: AuctionEndedLifecycleActivity, eventType: string) {
+  if (!config.rnsAdminActivitySlackWebhookUrl) return;
+
+  const contractAddress =
+    activity.source === "primary_auction"
+      ? config.rnsContracts.auctionHouse
+      : config.rnsContracts.marketplace;
+  const dispatchKey = [
+    "auction-ended",
+    "admin",
+    activity.chainId,
+    contractAddress,
+    activity.auctionId,
+    activity.endTime,
+  ].join(":");
+  const attemptCount = await claimRnsAuctionLifecycleDispatch({
+    dispatchKey,
+    chainId: activity.chainId,
+    channel: "admin_slack",
+    eventType,
+    recipient: "stage0-admin",
+    detail: {
+      source: activity.source,
+      auctionId: activity.auctionId.toString(),
+      fqdn: activity.fqdn,
+    },
+  });
+  if (!attemptCount) return;
+
+  const amount = (await formatEthUsdAmount(activity.highestBid)) ?? "No winning bid";
+  const hasWinner = Boolean(activity.highestBidder);
+
+  try {
+    await postSlack({
+      text: hasWinner
+        ? `${activity.fqdn} auction ended with a winner`
+        : `${activity.fqdn} auction ended without bids`,
+      blocks: [
+        {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: hasWinner ? "Auction ended - action required" : "Auction ended - no bids",
+          },
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: `*Name*\n${activity.fqdn}` },
+            { type: "mrkdwn", text: `*Source*\n${activity.source === "primary_auction" ? "Reserved auction" : "Wallet marketplace"}` },
+            { type: "mrkdwn", text: `*Bids*\n${activity.bidCount}` },
+            {
+              type: "mrkdwn",
+              text: hasWinner
+                ? `*Winner*\n${shortAddress(activity.highestBidder)}`
+                : "*Result*\nNo bids received",
+            },
+            ...(hasWinner ? [{ type: "mrkdwn", text: `*Final bid*\n${amount}` }] : []),
+          ],
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `<${config.stage0AppUrl}/domains/marketplace|Open the marketplace>`,
+            },
+          ],
+        },
+      ],
+    });
+    await completeRnsAuctionLifecycleDispatch(dispatchKey);
+  } catch (error) {
+    await failRnsAuctionLifecycleDispatch({
+      dispatchKey,
+      attemptCount,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+export async function notifyAuctionEndedLifecycle(activity: AuctionEndedLifecycleActivity) {
+  const contractAddress =
+    activity.source === "primary_auction"
+      ? config.rnsContracts.auctionHouse
+      : config.rnsContracts.marketplace;
+  const hasWinner = Boolean(activity.highestBidder);
+  const eventType = hasWinner ? "auction_ended_with_winner" : "auction_ended_without_bids";
+  const amount = (await formatEthUsdAmount(activity.highestBid)) ?? "No winning bid";
+  const baseKey = [
+    "auction-ended",
+    activity.chainId,
+    contractAddress,
+    activity.auctionId,
+    activity.endTime,
+  ].join(":");
+  const emailedRecipients = new Set<string>();
+
+  const sellerSubscriptions =
+    activity.source === "marketplace" && activity.seller
+      ? await getRnsMarketplaceSellerSubscriptions({
+          chainId: activity.chainId,
+          node: activity.node,
+        })
+      : [];
+  const bidderSubscriptions = hasWinner
+    ? await getRnsMarketplaceBidderSubscriptions({
+        chainId: activity.chainId,
+        auctionId: activity.auctionId,
+        name: activity.name,
+      })
+    : [];
+  const watcherSubscriptions = await getRnsMarketplaceWatcherSubscriptions({
+    chainId: activity.chainId,
+    node: activity.node,
+    auctionId: activity.auctionId,
+    name: activity.name,
+  });
+
+  for (const subscription of sellerSubscriptions) {
+    const recipient = subscription.email.toLowerCase();
+    if (emailedRecipients.has(recipient)) continue;
+    emailedRecipients.add(recipient);
+    await sendAuctionLifecycleEmail(subscription, `${baseKey}:${recipient}`, {
+      chainId: activity.chainId,
+      eventType,
+      subject: hasWinner
+        ? `${activity.fqdn} ended with a winning bid`
+        : `${activity.fqdn} ended without bids`,
+      title: hasWinner ? "Your auction has ended" : "No bids were placed",
+      intro: hasWinner
+        ? "Finalize the auction to transfer the name, then withdraw your proceeds."
+        : "The auction is over. Reclaim your .rise name from marketplace escrow.",
+      bullets: hasWinner
+        ? [`Name: ${activity.fqdn}`, `Winning bid: ${amount}`, `Winner: ${shortAddress(activity.highestBidder)}`]
+        : [`Name: ${activity.fqdn}`, "Result: No bids received"],
+      ctaLabel: hasWinner ? "Finalize and claim proceeds" : "Reclaim your name",
+      detail: { role: "seller", source: activity.source, auctionId: activity.auctionId.toString() },
+    });
+  }
+
+  for (const subscription of bidderSubscriptions) {
+    if (subscription.wallet?.toLowerCase() !== activity.highestBidder?.toLowerCase()) continue;
+    const recipient = subscription.email.toLowerCase();
+    if (emailedRecipients.has(recipient)) continue;
+    emailedRecipients.add(recipient);
+    await sendAuctionLifecycleEmail(subscription, `${baseKey}:${recipient}`, {
+      chainId: activity.chainId,
+      eventType,
+      subject: `You won ${activity.fqdn}`,
+      title: `Claim ${activity.fqdn}`,
+      intro: "The auction has ended and your bid is the winner. Finalize it to receive the name.",
+      bullets: [`Name: ${activity.fqdn}`, `Winning bid: ${amount}`],
+      ctaLabel: "Claim your name",
+      detail: { role: "winner", source: activity.source, auctionId: activity.auctionId.toString() },
+    });
+  }
+
+  for (const subscription of watcherSubscriptions) {
+    const recipient = subscription.email.toLowerCase();
+    if (emailedRecipients.has(recipient)) continue;
+    emailedRecipients.add(recipient);
+    await sendAuctionLifecycleEmail(subscription, `${baseKey}:${recipient}`, {
+      chainId: activity.chainId,
+      eventType,
+      subject: hasWinner
+        ? `${activity.fqdn} auction has ended`
+        : `${activity.fqdn} ended without bids`,
+      title: "Auction watch update",
+      intro: hasWinner
+        ? "The auction you were watching has ended with a winning bid."
+        : "The auction you were watching ended without receiving a bid.",
+      bullets: hasWinner
+        ? [`Name: ${activity.fqdn}`, `Winning bid: ${amount}`, `Winner: ${shortAddress(activity.highestBidder)}`]
+        : [`Name: ${activity.fqdn}`, "Result: No bids received"],
+      ctaLabel: "View auction result",
+      detail: { role: "watcher", source: activity.source, auctionId: activity.auctionId.toString() },
+    });
+  }
+
+  await sendAuctionLifecycleSlack(activity, eventType);
 }
 
 export async function notifyAdminRnsRegistration(activity: AdminRegistrationActivity) {
@@ -451,17 +704,23 @@ export async function notifyMarketplaceSubscribers(activity: MarketplaceSubscrib
     }
 
     if (eventType === "marketplace.auction_settled") {
+      const hadWinner = Boolean(activity.winner);
       await maybeSendSubscriptionEmail(subscription, dispatchKey, {
-        subject: `Your ${fqdn} auction settled`,
-        title: `${fqdn} auction settled`,
-        intro: "Your auction has settled onchain.",
-        bullets: [
-          `Name: ${fqdn}`,
-          `Final amount: ${amount}`,
-          `Winner: ${shortAddress(activity.winner ?? activity.actor)}`,
-        ],
+        subject: hadWinner ? `Your ${fqdn} auction settled` : `${fqdn} returned to your wallet`,
+        title: hadWinner ? "Proceeds ready to withdraw" : "Your name has been returned",
+        intro: hadWinner
+          ? "The winning name transfer is complete and your sale proceeds are ready."
+          : "The no-bid auction was finalized and the name has returned to your wallet.",
+        bullets: hadWinner
+          ? [
+              `Name: ${fqdn}`,
+              `Final amount: ${amount}`,
+              `Winner: ${shortAddress(activity.winner)}`,
+            ]
+          : [`Name: ${fqdn}`, "Result: No bids received"],
         txHash: activity.txHash,
         logIndex: activity.logIndex,
+        ctaLabel: hadWinner ? "Withdraw proceeds" : "View your name",
       });
       continue;
     }
@@ -505,6 +764,7 @@ export async function notifyMarketplaceSubscribers(activity: MarketplaceSubscrib
     }
 
     if (eventType === "marketplace.auction_settled") {
+      if (!activity.winner) continue;
       const didWin = subscriptionWallet && winnerWallet && subscriptionWallet === winnerWallet;
       await maybeSendSubscriptionEmail(subscription, dispatchKey, {
         subject: didWin ? `You won ${fqdn}` : `Auction ended for ${fqdn}`,
@@ -548,15 +808,20 @@ export async function notifyMarketplaceSubscribers(activity: MarketplaceSubscrib
     }
 
     if (eventType === "marketplace.auction_settled") {
+      const hadWinner = Boolean(activity.winner);
       await maybeSendSubscriptionEmail(subscription, dispatchKey, {
-        subject: `${fqdn} auction settled`,
+        subject: hadWinner ? `${fqdn} auction settled` : `${fqdn} closed without bids`,
         title: `Auction watch update`,
-        intro: "A watched .rise auction has now settled onchain.",
-        bullets: [
-          `Name: ${fqdn}`,
-          `Final amount: ${amount}`,
-          `Winner: ${shortAddress(activity.winner ?? activity.actor)}`,
-        ],
+        intro: hadWinner
+          ? "A watched .rise auction has now settled onchain."
+          : "A watched .rise auction closed without receiving a bid.",
+        bullets: hadWinner
+          ? [
+              `Name: ${fqdn}`,
+              `Final amount: ${amount}`,
+              `Winner: ${shortAddress(activity.winner)}`,
+            ]
+          : [`Name: ${fqdn}`, "Result: No bids received"],
         txHash: activity.txHash,
         logIndex: activity.logIndex,
       });

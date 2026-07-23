@@ -151,6 +151,20 @@ export interface RnsMarketplaceAuctionRecord {
   updatedAt: string;
 }
 
+export interface RnsEndedAuctionRecord {
+  source: "primary_auction" | "marketplace";
+  chainId: number;
+  auctionId: bigint;
+  name: string;
+  fqdn: string;
+  node: `0x${string}` | null;
+  seller: `0x${string}` | null;
+  highestBidder: `0x${string}` | null;
+  highestBid: bigint;
+  bidCount: number;
+  endTime: bigint;
+}
+
 export interface RnsMarketplaceEventRecord {
   id: bigint;
   chainId: number;
@@ -1797,7 +1811,7 @@ export async function applyRnsPrimaryAuctionSettled(
   input: {
     chainId: number;
     auctionId: bigint;
-    winner: `0x${string}`;
+    winner: `0x${string}` | null;
     amount: bigint;
     blockNumber: bigint;
   },
@@ -2390,6 +2404,84 @@ export async function getRnsMarketplaceEvents(input: { chainId: number; limit: n
     blockTime: row.block_time,
     payload: row.payload,
   })) satisfies RnsMarketplaceEventRecord[];
+}
+
+export async function getRnsEndedAuctionsForLifecycle(input: {
+  chainId: number;
+  nowUnix: bigint;
+  limit?: number;
+}) {
+  const result = await pool.query<{
+    source: "primary_auction" | "marketplace";
+    chain_id: number;
+    auction_id: string;
+    name: string;
+    fqdn: string;
+    node: string | null;
+    seller: string | null;
+    highest_bidder: string | null;
+    highest_bid: string;
+    bid_count: number;
+    end_time: string;
+  }>(
+    `
+      select *
+      from (
+        select
+          'primary_auction'::text as source,
+          chain_id,
+          auction_id,
+          name,
+          fqdn,
+          null::text as node,
+          null::text as seller,
+          highest_bidder,
+          highest_bid,
+          bid_count,
+          end_time
+        from stage0_rns.primary_auctions
+        where chain_id = $1
+          and status not in ('settled', 'cancelled')
+          and end_time <= $2
+
+        union all
+
+        select
+          'marketplace'::text as source,
+          chain_id,
+          auction_id,
+          name,
+          fqdn,
+          node,
+          seller,
+          highest_bidder,
+          highest_bid,
+          bid_count,
+          end_time
+        from stage0_rns.marketplace_auctions
+        where chain_id = $1
+          and status not in ('settled', 'cancelled')
+          and end_time <= $2
+      ) ended
+      order by end_time asc, source asc, auction_id asc
+      limit $3
+    `,
+    [input.chainId, input.nowUnix.toString(), input.limit ?? 250],
+  );
+
+  return result.rows.map((row) => ({
+    source: row.source,
+    chainId: row.chain_id,
+    auctionId: BigInt(row.auction_id),
+    name: row.name,
+    fqdn: row.fqdn,
+    node: row.node as `0x${string}` | null,
+    seller: row.seller as `0x${string}` | null,
+    highestBidder: row.highest_bidder as `0x${string}` | null,
+    highestBid: BigInt(row.highest_bid),
+    bidCount: row.bid_count,
+    endTime: BigInt(row.end_time),
+  })) satisfies RnsEndedAuctionRecord[];
 }
 
 export async function getRnsPrimaryAuctionById(
@@ -3204,6 +3296,97 @@ export async function releaseRnsNotificationDispatch(dispatchKey: string) {
   await pool.query(
     `delete from stage0_rns.notification_dispatches where dispatch_key = $1`,
     [dispatchKey],
+  );
+}
+
+export async function claimRnsAuctionLifecycleDispatch(input: {
+  dispatchKey: string;
+  chainId: number;
+  channel: "email" | "admin_slack";
+  subscriptionId?: number | null;
+  eventType: string;
+  recipient: string;
+  detail?: unknown;
+}) {
+  const result = await pool.query<{ attempt_count: number }>(
+    `
+      insert into stage0_rns.auction_lifecycle_dispatches (
+        dispatch_key,
+        chain_id,
+        channel,
+        subscription_id,
+        event_type,
+        recipient,
+        status,
+        attempt_count,
+        detail,
+        last_attempt_at,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5, lower($6), 'sending', 1, $7::jsonb, now(), now())
+      on conflict (dispatch_key)
+      do update set
+        status = 'sending',
+        attempt_count = stage0_rns.auction_lifecycle_dispatches.attempt_count + 1,
+        next_attempt_at = null,
+        last_error = null,
+        last_attempt_at = now(),
+        updated_at = now()
+      where stage0_rns.auction_lifecycle_dispatches.attempt_count < 3
+        and (
+          (
+            stage0_rns.auction_lifecycle_dispatches.status = 'failed'
+            and coalesce(stage0_rns.auction_lifecycle_dispatches.next_attempt_at, now()) <= now()
+          )
+          or (
+            stage0_rns.auction_lifecycle_dispatches.status = 'sending'
+            and stage0_rns.auction_lifecycle_dispatches.last_attempt_at <= now() - interval '15 minutes'
+          )
+        )
+      returning attempt_count
+    `,
+    [
+      input.dispatchKey,
+      input.chainId,
+      input.channel,
+      input.subscriptionId ?? null,
+      input.eventType,
+      input.recipient,
+      JSON.stringify(input.detail ?? {}),
+    ],
+  );
+
+  return result.rows[0]?.attempt_count ?? null;
+}
+
+export async function completeRnsAuctionLifecycleDispatch(dispatchKey: string) {
+  await pool.query(
+    `
+      update stage0_rns.auction_lifecycle_dispatches
+      set status = 'sent', sent_at = now(), next_attempt_at = null, last_error = null, updated_at = now()
+      where dispatch_key = $1
+    `,
+    [dispatchKey],
+  );
+}
+
+export async function failRnsAuctionLifecycleDispatch(input: {
+  dispatchKey: string;
+  attemptCount: number;
+  error: string;
+}) {
+  const retryDelaySeconds = Math.min(15 * 60, 60 * 2 ** Math.max(0, input.attemptCount - 1));
+  await pool.query(
+    `
+      update stage0_rns.auction_lifecycle_dispatches
+      set
+        status = 'failed',
+        next_attempt_at = case when attempt_count < 3 then now() + ($2 * interval '1 second') else null end,
+        last_error = left($3, 1000),
+        updated_at = now()
+      where dispatch_key = $1
+    `,
+    [input.dispatchKey, retryDelaySeconds, input.error],
   );
 }
 

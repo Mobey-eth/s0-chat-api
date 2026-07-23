@@ -3,7 +3,7 @@ import { z } from "zod";
 
 loadEnv();
 
-const RNS_V2_START_BLOCK = 46647258n;
+const RNS_V2_START_BLOCK = 49_715_519n;
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -25,12 +25,13 @@ const envSchema = z.object({
   RISE_TESTNET_RPC_URL: z.string().url().default("https://testnet.riselabs.xyz"),
   RISE_TESTNET_CHAIN_ID: z.coerce.number().int().positive().default(11155931),
   RISE_TESTNET_EXPLORER_URL: z.string().url().default("https://explorer.testnet.riselabs.xyz"),
-  RNS_REGISTRY_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x70b9896Aef2f01b2Ccc05d6127ec5be8390A6860"),
-  RNS_RESOLVER_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0xAF79d3D6a2dd498c86A2Eff9B42c18D4979f6236"),
-  RNS_REGISTRAR_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x0ddAfd215E134ab5A397c3EdF2cadB432a80a3CC"),
-  RNS_AUCTION_HOUSE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x3304Cd2ebEDC81e6313076b332e80a05bF758fdB"),
-  RNS_MARKETPLACE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x9C96108c8eB45c4Bd192E73f5A2685d2B3D9bFBe"),
+  RNS_REGISTRY_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x18E2B26E04B624131630355f00655330FAcb3d0C"),
+  RNS_RESOLVER_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x50593CAB471272c0D67014F6233eAcb897F5d705"),
+  RNS_REGISTRAR_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x87e6e5fA7E63fF008d8Dc5347503a8ED5d6bdA77"),
+  RNS_AUCTION_HOUSE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0xaCb8DE38FD057ed8288BAa6AE60434FBB5f1DEd0"),
+  RNS_MARKETPLACE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x92b421f992892e26074e9529f61acf1b86f13bd7"),
   RNS_SYNC_INTERVAL_SECONDS: z.coerce.number().int().positive().default(180),
+  RNS_AUCTION_LIFECYCLE_INTERVAL_SECONDS: z.coerce.number().int().min(60).max(300).default(180),
   RNS_RECONCILE_INTERVAL_SECONDS: z.coerce.number().int().positive().default(12 * 60 * 60),
   RNS_SYNC_CHUNK_SIZE: z.coerce.number().int().positive().default(5_000),
   RNS_REGISTRY_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_V2_START_BLOCK),
@@ -93,6 +94,7 @@ export const config = {
     marketplace: env.RNS_MARKETPLACE_ADDRESS.toLowerCase(),
   },
   rnsSyncIntervalSeconds: env.RNS_SYNC_INTERVAL_SECONDS,
+  rnsAuctionLifecycleIntervalSeconds: env.RNS_AUCTION_LIFECYCLE_INTERVAL_SECONDS,
   rnsReconcileIntervalSeconds: env.RNS_RECONCILE_INTERVAL_SECONDS,
   rnsSyncChunkSize: env.RNS_SYNC_CHUNK_SIZE,
   rnsStartBlocks: {

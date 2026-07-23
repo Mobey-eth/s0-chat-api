@@ -17,6 +17,17 @@ const client = await pool.connect();
 
 try {
   await client.query("begin");
+  const lifecycleDispatches = await client.query(
+    "delete from stage0_rns.auction_lifecycle_dispatches where chain_id = $1",
+    [config.riseTestnetChainId],
+  );
+  const notificationDispatches = await client.query(
+    "delete from stage0_rns.notification_dispatches",
+  );
+  const notificationSubscriptions = await client.query(
+    "delete from stage0_rns.notification_subscriptions where chain_id = $1",
+    [config.riseTestnetChainId],
+  );
   const events = await client.query(
     "delete from stage0_rns.marketplace_events where chain_id = $1",
     [config.riseTestnetChainId],
@@ -41,6 +52,18 @@ try {
     "delete from stage0_rns.sync_state where chain_id = $1",
     [config.riseTestnetChainId],
   );
+  const reservedActivations = await client.query(
+    `
+      update stage0_rns.reserved_names
+      set primary_auction_id = null,
+          activation_tx_hash = null,
+          activated_at = null,
+          updated_at = now()
+      where chain_id = $1
+        and (primary_auction_id is not null or activation_tx_hash is not null or activated_at is not null)
+    `,
+    [config.riseTestnetChainId],
+  );
   await client.query("commit");
 
   logger.info("RNS index reset complete", {
@@ -51,6 +74,10 @@ try {
     deletedMarketplaceAuctions: marketplaceAuctions.rowCount,
     deletedMarketplaceEvents: events.rowCount,
     deletedSyncStates: sync.rowCount,
+    deletedNotificationSubscriptions: notificationSubscriptions.rowCount,
+    deletedNotificationDispatches: notificationDispatches.rowCount,
+    deletedLifecycleDispatches: lifecycleDispatches.rowCount,
+    clearedReservedActivations: reservedActivations.rowCount,
     nextRegistry: config.rnsContracts.registry,
     nextResolver: config.rnsContracts.resolver,
     nextRegistrar: config.rnsContracts.registrar,
