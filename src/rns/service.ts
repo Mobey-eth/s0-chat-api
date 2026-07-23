@@ -39,6 +39,7 @@ import {
   getRnsPrimaryNameForAddress,
   getRnsPrimaryAuctions,
   getRnsSyncStates,
+  markRnsReservedNameActivatedByLabel,
   recordRnsMarketplaceEvent,
   type RnsJobName,
   type RnsMarketplaceAuctionRecord,
@@ -47,8 +48,12 @@ import {
   type RnsNameRecord,
   type RnsPrimaryAuctionRecord,
   upsertRnsMarketplaceAuction,
+  upsertRnsMarketplaceAuctionSnapshot,
   upsertRnsMarketplaceListing,
+  upsertRnsMarketplaceListingSnapshot,
+  upsertRnsKnownLabelSnapshot,
   upsertRnsPrimaryAuction,
+  upsertRnsPrimaryAuctionSnapshot,
   upsertRnsRegistration,
   upsertRnsSyncState,
 } from "./store.js";
@@ -138,6 +143,21 @@ const resolverReadAbi = parseAbi([
 
 const registrarReadAbi = parseAbi(["function expiryOf(string name) view returns (uint256)"]);
 
+const primaryAuctionReadAbi = parseAbi([
+  "function registrar() view returns (address)",
+  "function auctionCount() view returns (uint256)",
+  "function auction(uint256 auctionId) view returns ((string name,uint256 duration,uint256 reservePrice,uint96 minIncrementBps,uint64 startTime,uint64 endTime,uint64 currentExtensionWindow,uint32 bidCount,address highestBidder,uint256 highestBid,bool settled,bool cancelled))",
+]);
+
+const marketplaceReadAbi = parseAbi([
+  "function registry() view returns (address)",
+  "function registrar() view returns (address)",
+  "function listingCount() view returns (uint256)",
+  "function auctionCount() view returns (uint256)",
+  "function listing(uint256 listingId) view returns ((bytes32 node,bytes32 labelHash,string name,address seller,uint256 price,bool active))",
+  "function auction(uint256 auctionId) view returns ((bytes32 node,bytes32 labelHash,string name,address seller,uint256 reservePrice,uint96 minIncrementBps,uint64 startTime,uint64 endTime,uint64 currentExtensionWindow,uint32 bidCount,address highestBidder,uint256 highestBid,bool settled,bool cancelled))",
+]);
+
 const DEFAULT_JOB_ORDER = [
   "registrar",
   "registry",
@@ -159,13 +179,103 @@ type RegistrarDecodedCall = {
   label: string | null;
   fqdn: string | null;
   resolver: `0x${string}` | null;
+  txTo: `0x${string}` | null;
 };
 
 const deploymentBlockCache = new Map<string, Promise<bigint>>();
 const blockTimeCache = new Map<bigint, Promise<Date>>();
 let syncPromise: Promise<void> | null = null;
 let reconcilePromise: Promise<void> | null = null;
+let marketplaceSnapshotPromise: Promise<void> | null = null;
+let contractConfigurationPromise: Promise<void> | null = null;
+let marketplaceSnapshotAt = 0;
 let jobsStarted = false;
+
+const MARKETPLACE_SNAPSHOT_TTL_MS = 10_000;
+const MARKETPLACE_SNAPSHOT_MAX_ITEMS = 10_000;
+const MARKETPLACE_MAX_BACKFILL_BLOCKS = 100_000n;
+const MARKETPLACE_RECENT_EVENT_BLOCKS = 5_000n;
+const RNS_RPC_MAX_LOG_RANGE = 5_000n;
+
+type PrimaryAuctionChainRecord = {
+  name: string;
+  duration: bigint;
+  reservePrice: bigint;
+  startTime: bigint;
+  endTime: bigint;
+  currentExtensionWindow: bigint;
+  bidCount: number;
+  highestBidder: `0x${string}`;
+  highestBid: bigint;
+  settled: boolean;
+  cancelled: boolean;
+};
+
+type MarketplaceListingChainRecord = {
+  node: `0x${string}`;
+  name: string;
+  seller: `0x${string}`;
+  price: bigint;
+  active: boolean;
+};
+
+type MarketplaceAuctionChainRecord = {
+  node: `0x${string}`;
+  name: string;
+  seller: `0x${string}`;
+  reservePrice: bigint;
+  startTime: bigint;
+  endTime: bigint;
+  currentExtensionWindow: bigint;
+  bidCount: number;
+  highestBidder: `0x${string}`;
+  highestBid: bigint;
+  settled: boolean;
+  cancelled: boolean;
+};
+
+async function assertRnsContractConfiguration() {
+  if (!contractConfigurationPromise) {
+    contractConfigurationPromise = (async () => {
+      const [auctionRegistrar, marketplaceRegistry, marketplaceRegistrar] = await Promise.all([
+        client.readContract({
+          address: config.rnsContracts.auctionHouse as `0x${string}`,
+          abi: primaryAuctionReadAbi,
+          functionName: "registrar",
+        }),
+        client.readContract({
+          address: config.rnsContracts.marketplace as `0x${string}`,
+          abi: marketplaceReadAbi,
+          functionName: "registry",
+        }),
+        client.readContract({
+          address: config.rnsContracts.marketplace as `0x${string}`,
+          abi: marketplaceReadAbi,
+          functionName: "registrar",
+        }),
+      ]);
+
+      const mismatches = [
+        ["auction registrar", auctionRegistrar, config.rnsContracts.registrar],
+        ["marketplace registry", marketplaceRegistry, config.rnsContracts.registry],
+        ["marketplace registrar", marketplaceRegistrar, config.rnsContracts.registrar],
+      ].filter(([, actual, expected]) => String(actual).toLowerCase() !== String(expected).toLowerCase());
+
+      if (mismatches.length > 0) {
+        throw new Error(
+          `RNS contract configuration mismatch: ${mismatches
+            .map(([name, actual, expected]) => `${name} is ${actual}, configured as ${expected}`)
+            .join("; ")}`,
+        );
+      }
+    })().catch((error) => {
+      contractConfigurationPromise = null;
+      throw error;
+    });
+  }
+
+  return contractConfigurationPromise;
+}
 
 function normalizeLabel(input: string | null | undefined) {
   const value = input?.trim().toLowerCase().replace(/\.rise$/i, "");
@@ -209,6 +319,216 @@ async function getBlockTime(blockNumber: bigint) {
 async function getBlockHash(blockNumber: bigint) {
   const block = await client.getBlock({ blockNumber });
   return block.hash;
+}
+
+function snapshotAuctionStatus(input: {
+  startTime: bigint;
+  endTime: bigint;
+  settled: boolean;
+  cancelled: boolean;
+}) {
+  if (input.cancelled) return "cancelled";
+  if (input.settled) return "settled";
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  if (now < input.startTime) return "scheduled";
+  if (now >= input.endTime) return "ended";
+  return "active";
+}
+
+function checkedSnapshotCount(value: bigint, label: string) {
+  if (value > BigInt(MARKETPLACE_SNAPSHOT_MAX_ITEMS)) {
+    throw new Error(`${label} count ${value} exceeds snapshot safety limit`);
+  }
+  return Number(value);
+}
+
+async function readIndexedRecords<T>(count: number, reader: (index: bigint) => Promise<T>) {
+  if (count === 0) return [];
+  const records = new Array<T>(count);
+  let nextIndex = 0;
+  const workerCount = Math.min(8, count);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= count) return;
+        records[index] = await reader(BigInt(index));
+      }
+    }),
+  );
+
+  return records;
+}
+
+async function runRnsMarketplaceSnapshot(reason: string) {
+  await assertRnsContractConfiguration();
+  const head = await client.getBlockNumber();
+  const [primaryCountRaw, listingCountRaw, auctionCountRaw] = await Promise.all([
+    client.readContract({
+      address: config.rnsContracts.auctionHouse as `0x${string}`,
+      abi: primaryAuctionReadAbi,
+      functionName: "auctionCount",
+    }),
+    client.readContract({
+      address: config.rnsContracts.marketplace as `0x${string}`,
+      abi: marketplaceReadAbi,
+      functionName: "listingCount",
+    }),
+    client.readContract({
+      address: config.rnsContracts.marketplace as `0x${string}`,
+      abi: marketplaceReadAbi,
+      functionName: "auctionCount",
+    }),
+  ]);
+
+  const primaryCount = checkedSnapshotCount(primaryCountRaw, "primary auction");
+  const listingCount = checkedSnapshotCount(listingCountRaw, "marketplace listing");
+  const auctionCount = checkedSnapshotCount(auctionCountRaw, "marketplace auction");
+
+  const [primaryAuctions, listings, marketplaceAuctions] = await Promise.all([
+    readIndexedRecords(primaryCount, async (auctionId) =>
+      client.readContract({
+        address: config.rnsContracts.auctionHouse as `0x${string}`,
+        abi: primaryAuctionReadAbi,
+        functionName: "auction",
+        args: [auctionId],
+      }) as Promise<PrimaryAuctionChainRecord>,
+    ),
+    readIndexedRecords(listingCount, async (listingId) =>
+      client.readContract({
+        address: config.rnsContracts.marketplace as `0x${string}`,
+        abi: marketplaceReadAbi,
+        functionName: "listing",
+        args: [listingId],
+      }) as Promise<MarketplaceListingChainRecord>,
+    ),
+    readIndexedRecords(auctionCount, async (auctionId) =>
+      client.readContract({
+        address: config.rnsContracts.marketplace as `0x${string}`,
+        abi: marketplaceReadAbi,
+        functionName: "auction",
+        args: [auctionId],
+      }) as Promise<MarketplaceAuctionChainRecord>,
+    ),
+  ]);
+
+  const db = await pool.connect();
+  const reservedLinks: Array<{ label: string; auctionId: bigint }> = [];
+  try {
+    await db.query("begin");
+
+    for (let index = 0; index < primaryAuctions.length; index += 1) {
+      const auction = primaryAuctions[index];
+      const name = normalizeLabel(auction.name);
+      if (!name) continue;
+      const highestBidder = isZeroAddress(auction.highestBidder)
+        ? null
+        : (toLowerHex(auction.highestBidder) as `0x${string}`);
+      const status = snapshotAuctionStatus(auction);
+
+      await upsertRnsPrimaryAuctionSnapshot(db, {
+        chainId: config.riseTestnetChainId,
+        auctionId: BigInt(index),
+        name,
+        duration: auction.duration,
+        reservePrice: auction.reservePrice,
+        startTime: auction.startTime,
+        endTime: auction.endTime,
+        currentExtensionWindow: auction.currentExtensionWindow,
+        bidCount: Number(auction.bidCount),
+        highestBidder,
+        highestBid: auction.highestBid,
+        status,
+        winner: auction.settled ? highestBidder : null,
+        settledAmount: auction.settled ? auction.highestBid : null,
+        blockNumber: head,
+      });
+      reservedLinks.push({ label: name, auctionId: BigInt(index) });
+    }
+
+    for (let index = 0; index < listings.length; index += 1) {
+      const listing = listings[index];
+      const name = normalizeLabel(listing.name);
+      if (!name) continue;
+      await upsertRnsMarketplaceListingSnapshot(db, {
+        chainId: config.riseTestnetChainId,
+        listingId: BigInt(index),
+        node: toLowerHex(listing.node) as `0x${string}`,
+        name,
+        seller: toLowerHex(listing.seller) as `0x${string}`,
+        price: listing.price,
+        active: listing.active,
+        blockNumber: head,
+      });
+    }
+
+    for (let index = 0; index < marketplaceAuctions.length; index += 1) {
+      const auction = marketplaceAuctions[index];
+      const name = normalizeLabel(auction.name);
+      if (!name) continue;
+      const highestBidder = isZeroAddress(auction.highestBidder)
+        ? null
+        : (toLowerHex(auction.highestBidder) as `0x${string}`);
+      const status = snapshotAuctionStatus(auction);
+      await upsertRnsMarketplaceAuctionSnapshot(db, {
+        chainId: config.riseTestnetChainId,
+        auctionId: BigInt(index),
+        node: toLowerHex(auction.node) as `0x${string}`,
+        name,
+        seller: toLowerHex(auction.seller) as `0x${string}`,
+        reservePrice: auction.reservePrice,
+        startTime: auction.startTime,
+        endTime: auction.endTime,
+        currentExtensionWindow: auction.currentExtensionWindow,
+        bidCount: Number(auction.bidCount),
+        highestBidder,
+        highestBid: auction.highestBid,
+        status,
+        winner: auction.settled ? highestBidder : null,
+        settledAmount: auction.settled ? auction.highestBid : null,
+        blockNumber: head,
+      });
+    }
+
+    await db.query("commit");
+  } catch (error) {
+    await db.query("rollback");
+    throw error;
+  } finally {
+    db.release();
+  }
+
+  await Promise.all(
+    reservedLinks.map((link) =>
+      markRnsReservedNameActivatedByLabel({
+        chainId: config.riseTestnetChainId,
+        label: link.label,
+        primaryAuctionId: link.auctionId,
+      }),
+    ),
+  );
+
+  marketplaceSnapshotAt = Date.now();
+  logger.info("RNS marketplace snapshot refreshed", {
+    reason,
+    chainId: config.riseTestnetChainId,
+    blockNumber: head.toString(),
+    primaryAuctions: primaryCount,
+    listings: listingCount,
+    marketplaceAuctions: auctionCount,
+  });
+}
+
+export async function ensureRnsMarketplaceSnapshot(reason = "manual", force = false) {
+  if (!force && Date.now() - marketplaceSnapshotAt < MARKETPLACE_SNAPSHOT_TTL_MS) return;
+  if (!marketplaceSnapshotPromise) {
+    marketplaceSnapshotPromise = runRnsMarketplaceSnapshot(reason).finally(() => {
+      marketplaceSnapshotPromise = null;
+    });
+  }
+  return marketplaceSnapshotPromise;
 }
 
 async function findDeploymentBlock(address: string) {
@@ -276,8 +596,10 @@ function clampRnsSyncRange(fromBlock: bigint, toBlock: bigint): [bigint, bigint]
 }
 
 async function decodeRegistrarCall(txHash: `0x${string}`): Promise<RegistrarDecodedCall> {
+  let txTo: `0x${string}` | null = null;
   try {
     const tx = await client.getTransaction({ hash: txHash });
+    txTo = toLowerHex(tx.to);
     const decoded = decodeFunctionData({
       abi: registrarDecodeAbi,
       data: tx.input,
@@ -286,27 +608,27 @@ async function decodeRegistrarCall(txHash: `0x${string}`): Promise<RegistrarDeco
     if (decoded.functionName === "register" || decoded.functionName === "registerFixedPremium") {
       const label = normalizeLabel(String(decoded.args[0]));
       const resolver = toLowerHex(decoded.args[2] as `0x${string}`);
-      return { label, fqdn: toFqdn(label), resolver: isZeroAddress(resolver) ? null : resolver };
+      return { label, fqdn: toFqdn(label), resolver: isZeroAddress(resolver) ? null : resolver, txTo };
     }
 
     if (decoded.functionName === "controllerRegisterReserved" || decoded.functionName === "adminAssignProtected") {
       const label = normalizeLabel(String(decoded.args[0]));
       const resolver = toLowerHex(decoded.args[3] as `0x${string}`);
-      return { label, fqdn: toFqdn(label), resolver: isZeroAddress(resolver) ? null : resolver };
+      return { label, fqdn: toFqdn(label), resolver: isZeroAddress(resolver) ? null : resolver, txTo };
     }
 
     if (decoded.functionName === "renew" || decoded.functionName === "release") {
       const label = normalizeLabel(String(decoded.args[0]));
-      return { label, fqdn: toFqdn(label), resolver: null };
+      return { label, fqdn: toFqdn(label), resolver: null, txTo };
     }
   } catch {
     // Ignore decode failures; reconciliation can still fill label via resolver.text later.
   }
 
-  return { label: null, fqdn: null, resolver: null };
+  return { label: null, fqdn: null, resolver: null, txTo };
 }
 
-async function syncRegistrarRange(fromBlock: bigint, toBlock: bigint) {
+async function syncRegistrarRange(fromBlock: bigint, toBlock: bigint, emitNotifications = true) {
   const range = clampRnsSyncRange(fromBlock, toBlock);
   if (!range) return;
   [fromBlock, toBlock] = range;
@@ -378,15 +700,17 @@ async function syncRegistrarRange(fromBlock: bigint, toBlock: bigint) {
           blockNumber: log.blockNumber,
           blockTime,
         });
-        pendingAdminNotifications.push({
-          chainId: config.riseTestnetChainId,
-          name: decoded.label,
-          fqdn: decoded.fqdn,
-          registrant: registrant as `0x${string}`,
-          expiry: ((log as (typeof registered)[number]).args.expires as bigint | undefined) ?? 0n,
-          txHash: log.transactionHash,
-          logIndex: log.logIndex ?? 0,
-        });
+        if (decoded.txTo !== config.rnsContracts.auctionHouse.toLowerCase()) {
+          pendingAdminNotifications.push({
+            chainId: config.riseTestnetChainId,
+            name: decoded.label,
+            fqdn: decoded.fqdn,
+            registrant: registrant as `0x${string}`,
+            expiry: ((log as (typeof registered)[number]).args.expires as bigint | undefined) ?? 0n,
+            txHash: log.transactionHash,
+            logIndex: log.logIndex ?? 0,
+          });
+        }
         continue;
       }
 
@@ -423,8 +747,10 @@ async function syncRegistrarRange(fromBlock: bigint, toBlock: bigint) {
     db.release();
   }
 
-  for (const notification of pendingAdminNotifications) {
-    await safelyNotify("admin-rns-registration", () => notifyAdminRnsRegistration(notification));
+  if (emitNotifications) {
+    for (const notification of pendingAdminNotifications) {
+      await safelyNotify("admin-rns-registration", () => notifyAdminRnsRegistration(notification));
+    }
   }
 }
 
@@ -583,7 +909,7 @@ async function syncResolverRange(fromBlock: bigint, toBlock: bigint) {
   }
 }
 
-async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint) {
+async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitNotifications = true) {
   const range = clampRnsSyncRange(fromBlock, toBlock);
   if (!range) return;
   [fromBlock, toBlock] = range;
@@ -653,6 +979,9 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint) {
     txHash: `0x${string}`;
     logIndex: number;
   }> = [];
+  const pendingSubscriberNotifications: Array<
+    Parameters<typeof notifyMarketplaceSubscribers>[0]
+  > = [];
   try {
     await db.query("begin");
 
@@ -708,6 +1037,20 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint) {
           txHash: log.transactionHash,
           logIndex: log.logIndex,
         });
+        pendingSubscriberNotifications.push({
+          chainId: config.riseTestnetChainId,
+          source: "primary_auction",
+          eventType: "primary_auction.created",
+          entityType: "auction",
+          entityId: auctionId,
+          name,
+          fqdn: `${name}.rise`,
+          node: namehash(`${name}.rise`) as `0x${string}`,
+          amount: (args.reservePrice as bigint | undefined) ?? 0n,
+          status: "scheduled",
+          txHash: log.transactionHash,
+          logIndex: log.logIndex,
+        });
         continue;
       }
 
@@ -716,6 +1059,10 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint) {
         const auctionId = args.auctionId as bigint;
         const bidder = toLowerHex(args.bidder as `0x${string}`) as `0x${string}`;
         const amount = (args.amount as bigint | undefined) ?? 0n;
+        const previousRecord = await getRnsPrimaryAuctionById(db, {
+          chainId: config.riseTestnetChainId,
+          auctionId,
+        });
         await applyRnsPrimaryAuctionBid(db, {
           chainId: config.riseTestnetChainId,
           auctionId,
@@ -759,6 +1106,24 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint) {
           txHash: log.transactionHash,
           logIndex: log.logIndex,
         });
+        if (record) {
+          pendingSubscriberNotifications.push({
+            chainId: config.riseTestnetChainId,
+            source: "primary_auction",
+            eventType: "primary_auction.bid",
+            entityType: "auction",
+            entityId: auctionId,
+            name: record.name,
+            fqdn: record.fqdn,
+            node: namehash(record.fqdn) as `0x${string}`,
+            actor: bidder,
+            previousHighestBidder: previousRecord?.highestBidder ?? null,
+            amount,
+            status: record.status,
+            txHash: log.transactionHash,
+            logIndex: log.logIndex,
+          });
+        }
         continue;
       }
 
@@ -832,6 +1197,21 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint) {
           txHash: log.transactionHash,
           logIndex: log.logIndex,
         });
+        if (record) {
+          pendingSubscriberNotifications.push({
+            chainId: config.riseTestnetChainId,
+            source: "primary_auction",
+            eventType: "primary_auction.cancelled",
+            entityType: "auction",
+            entityId: auctionId,
+            name: record.name,
+            fqdn: record.fqdn,
+            node: namehash(record.fqdn) as `0x${string}`,
+            status: "cancelled",
+            txHash: log.transactionHash,
+            logIndex: log.logIndex,
+          });
+        }
         continue;
       }
 
@@ -878,6 +1258,24 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint) {
           txHash: log.transactionHash,
           logIndex: log.logIndex,
         });
+        if (record) {
+          pendingSubscriberNotifications.push({
+            chainId: config.riseTestnetChainId,
+            source: "primary_auction",
+            eventType: "primary_auction.settled",
+            entityType: "auction",
+            entityId: auctionId,
+            name: record.name,
+            fqdn: record.fqdn,
+            node: namehash(record.fqdn) as `0x${string}`,
+            actor: winner,
+            amount,
+            status: "settled",
+            winner,
+            txHash: log.transactionHash,
+            logIndex: log.logIndex,
+          });
+        }
         continue;
       }
 
@@ -906,14 +1304,22 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint) {
     db.release();
   }
 
-  for (const notification of pendingAdminNotifications) {
-    await safelyNotify("admin-primary-auction", () =>
-      notifyAdminRnsMarketplaceActivity(notification),
-    );
+  if (emitNotifications) {
+    for (const notification of pendingAdminNotifications) {
+      await safelyNotify("admin-primary-auction", () =>
+        notifyAdminRnsMarketplaceActivity(notification),
+      );
+    }
+
+    for (const notification of pendingSubscriberNotifications) {
+      await safelyNotify("primary-auction-subscribers", () =>
+        notifyMarketplaceSubscribers(notification),
+      );
+    }
   }
 }
 
-async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint) {
+async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNotifications = true) {
   const range = clampRnsSyncRange(fromBlock, toBlock);
   if (!range) return;
   [fromBlock, toBlock] = range;
@@ -1532,41 +1938,92 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint) {
     db.release();
   }
 
-  for (const notification of pendingAdminNotifications) {
-    await safelyNotify("admin-marketplace", () =>
-      notifyAdminRnsMarketplaceActivity(notification),
-    );
-  }
+  if (emitNotifications) {
+    for (const notification of pendingAdminNotifications) {
+      await safelyNotify("admin-marketplace", () =>
+        notifyAdminRnsMarketplaceActivity(notification),
+      );
+    }
 
-  for (const notification of pendingSubscriberNotifications) {
-    await safelyNotify("marketplace-subscribers", () =>
-      notifyMarketplaceSubscribers(notification),
-    );
+    for (const notification of pendingSubscriberNotifications) {
+      await safelyNotify("marketplace-subscribers", () =>
+        notifyMarketplaceSubscribers(notification),
+      );
+    }
   }
 }
 
 async function syncJob(jobName: JobName) {
   const states = await getRnsSyncStates(config.riseTestnetChainId);
-  const currentState = states.find((state) => state.jobName === jobName);
+  const expectedContractAddress = getJobContractAddress(jobName);
+  const currentState = states.find(
+    (state) =>
+      state.jobName === jobName &&
+      state.contractAddress.toLowerCase() === expectedContractAddress.toLowerCase(),
+  );
+  const previousDeploymentState = states.find(
+    (state) =>
+      state.jobName === jobName &&
+      state.contractAddress.toLowerCase() !== expectedContractAddress.toLowerCase(),
+  );
   const head = await client.getBlockNumber();
+  const emitNotifications = Boolean(
+    currentState && head - currentState.lastProcessedBlock <= MARKETPLACE_MAX_BACKFILL_BLOCKS,
+  );
   const initialBlock = await getInitialJobBlock(jobName);
-  const startBlock = currentState
+  let startBlock = currentState
     ? (currentState.lastProcessedBlock < initialBlock ? initialBlock : currentState.lastProcessedBlock + 1n)
     : initialBlock;
+
+  if (!currentState && (jobName === "registry" || jobName === "resolver")) {
+    // Registrar events discover labels; direct reconciliation supplies current
+    // ownership and resolver state without replaying every historical update.
+    startBlock = head;
+  }
+
+  if (!currentState && previousDeploymentState) {
+    logger.warn("RNS index contract changed; initializing the active deployment", {
+      jobName,
+      chainId: config.riseTestnetChainId,
+      previousContractAddress: previousDeploymentState.contractAddress,
+      contractAddress: expectedContractAddress,
+      startBlock: startBlock.toString(),
+    });
+  }
+
+  if (
+    (jobName === "primary_auction" || jobName === "marketplace") &&
+    head - startBlock > MARKETPLACE_MAX_BACKFILL_BLOCKS
+  ) {
+    const recentStart = head > MARKETPLACE_RECENT_EVENT_BLOCKS
+      ? head - MARKETPLACE_RECENT_EVENT_BLOCKS
+      : initialBlock;
+    startBlock = recentStart > initialBlock ? recentStart : initialBlock;
+    logger.warn("RNS marketplace event index was stale; resuming from recent chain tail", {
+      jobName,
+      chainId: config.riseTestnetChainId,
+      previousBlock: currentState?.lastProcessedBlock.toString() ?? null,
+      resumeBlock: startBlock.toString(),
+      headBlock: head.toString(),
+    });
+  }
 
   if (startBlock > head) return;
 
   let cursor = startBlock;
   while (cursor <= head) {
-    const toBlock = cursor + BigInt(config.rnsSyncChunkSize) - 1n > head
+    const chunkSize = BigInt(config.rnsSyncChunkSize) > RNS_RPC_MAX_LOG_RANGE
+      ? RNS_RPC_MAX_LOG_RANGE
+      : BigInt(config.rnsSyncChunkSize);
+    const toBlock = cursor + chunkSize - 1n > head
       ? head
-      : cursor + BigInt(config.rnsSyncChunkSize) - 1n;
+      : cursor + chunkSize - 1n;
 
-    if (jobName === "registrar") await syncRegistrarRange(cursor, toBlock);
+    if (jobName === "registrar") await syncRegistrarRange(cursor, toBlock, emitNotifications);
     if (jobName === "registry") await syncRegistryRange(cursor, toBlock);
     if (jobName === "resolver") await syncResolverRange(cursor, toBlock);
-    if (jobName === "primary_auction") await syncPrimaryAuctionRange(cursor, toBlock);
-    if (jobName === "marketplace") await syncMarketplaceRange(cursor, toBlock);
+    if (jobName === "primary_auction") await syncPrimaryAuctionRange(cursor, toBlock, emitNotifications);
+    if (jobName === "marketplace") await syncMarketplaceRange(cursor, toBlock, emitNotifications);
 
     await upsertRnsSyncState({
       jobName,
@@ -1583,8 +2040,17 @@ async function syncJob(jobName: JobName) {
 async function runSync(reason: string, jobNames: readonly JobName[] = DEFAULT_JOB_ORDER) {
   const startedAt = Date.now();
   try {
+    await assertRnsContractConfiguration();
     for (const jobName of jobNames) {
       await syncJob(jobName);
+    }
+    if (
+      reason === "startup" &&
+      jobNames.some((jobName) =>
+        jobName === "registrar" || jobName === "registry" || jobName === "resolver",
+      )
+    ) {
+      await ensureRnsReconciliation("startup-post-sync");
     }
   } finally {
     blockTimeCache.clear();
@@ -1597,27 +2063,61 @@ async function runSync(reason: string, jobNames: readonly JobName[] = DEFAULT_JO
   });
 }
 
+async function reconcileAfterSyncFailure(reason: string, error: unknown) {
+  logger.warn("RNS sync failed; falling back to direct name reconciliation", {
+    reason,
+    error: error instanceof Error ? error.message : String(error),
+  });
+
+  try {
+    await ensureRnsReconciliation(`${reason}-sync-fallback`);
+  } catch (fallbackError) {
+    logger.warn("RNS direct reconciliation fallback failed", {
+      reason,
+      error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+    });
+  }
+}
+
 async function runReconciliation(reason: string) {
   try {
+    await assertRnsContractConfiguration();
     const names = await getRnsNamesForReconciliation(
       config.riseTestnetChainId,
       ACTIVE_RNS_REGISTRAR_START_BLOCK,
     );
     if (names.length === 0) return;
 
-    const head = await client.getBlockNumber();
+    let head: bigint;
+    try {
+      head = await client.getBlockNumber();
+    } catch (error) {
+      const states = await getRnsSyncStates(config.riseTestnetChainId);
+      head = states.reduce(
+        (max, state) => (state.lastProcessedBlock > max ? state.lastProcessedBlock : max),
+        0n,
+      );
+      logger.warn("RNS reconciliation could not read latest block; using last indexed block", {
+        reason,
+        fallbackBlock: head.toString(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const db = await pool.connect();
 
     try {
       await db.query("begin");
 
       for (const name of names) {
-        let owner = name.owner;
+        let owner: `0x${string}` | null = name.owner;
         let resolver = name.resolver;
         let resolvedAddress = name.resolvedAddress;
         let label = name.label;
         let fqdn = name.fqdn;
-        let expiry: bigint | null = name.expiry;
+        let expiry: bigint | null = null;
+        let ownerKnown = false;
+        let resolverKnown = false;
+        let resolvedAddressKnown = false;
 
         try {
           const ownerRaw = await client.readContract({
@@ -1627,8 +2127,9 @@ async function runReconciliation(reason: string) {
             args: [name.node],
           });
           owner = (toLowerHex(ownerRaw as `0x${string}`) ?? ZERO_ADDRESS) as `0x${string}`;
+          ownerKnown = true;
         } catch {
-          owner = ZERO_ADDRESS as `0x${string}`;
+          owner = null;
         }
 
         try {
@@ -1640,11 +2141,12 @@ async function runReconciliation(reason: string) {
           });
           const nextResolver = toLowerHex(resolverRaw as `0x${string}`);
           resolver = isZeroAddress(nextResolver) ? null : (nextResolver as `0x${string}`);
+          resolverKnown = true;
         } catch {
-          resolver = null;
+          resolver = name.resolver;
         }
 
-        if (resolver) {
+        if (resolverKnown && resolver) {
           try {
             const addrRaw = await client.readContract({
               address: resolver,
@@ -1654,8 +2156,9 @@ async function runReconciliation(reason: string) {
             });
             const nextAddress = toLowerHex(addrRaw as `0x${string}`);
             resolvedAddress = isZeroAddress(nextAddress) ? null : (nextAddress as `0x${string}`);
+            resolvedAddressKnown = true;
           } catch {
-            resolvedAddress = null;
+            resolvedAddress = name.resolvedAddress;
           }
 
           if (!label) {
@@ -1673,8 +2176,9 @@ async function runReconciliation(reason: string) {
               fqdn = name.fqdn;
             }
           }
-        } else {
+        } else if (resolverKnown) {
           resolvedAddress = null;
+          resolvedAddressKnown = true;
         }
 
         if (label) {
@@ -1686,8 +2190,29 @@ async function runReconciliation(reason: string) {
               args: [label],
             });
           } catch {
-            expiry = name.expiry;
+            expiry = null;
           }
+        }
+
+        const wouldEraseActiveName =
+          ownerKnown &&
+          isZeroAddress(owner) &&
+          (expiry === null || expiry === 0n) &&
+          !isZeroAddress(name.owner) &&
+          name.expiry > 0n;
+
+        if (wouldEraseActiveName) {
+          logger.warn("RNS reconciliation ignored zero owner/expiry read for active name", {
+            reason,
+            chainId: config.riseTestnetChainId,
+            node: name.node,
+            label: name.label,
+            previousOwner: name.owner,
+            previousExpiry: name.expiry.toString(),
+          });
+          owner = name.owner;
+          ownerKnown = false;
+          expiry = null;
         }
 
         await applyRnsReconciliation(db, {
@@ -1700,6 +2225,9 @@ async function runReconciliation(reason: string) {
           resolvedAddress,
           expiry,
           updatedBlock: head,
+          ownerKnown,
+          resolverKnown,
+          resolvedAddressKnown,
         });
       }
 
@@ -1729,16 +2257,25 @@ export async function ensureRnsSync(
     jobNames.every((jobName, index) => jobName === DEFAULT_JOB_ORDER[index]);
 
   if (!isDefaultJobSet) {
-    return runSync(reason, jobNames);
+    return runSync(reason, jobNames).catch(async (error) => {
+      logger.error("RNS sync failed", {
+        reason,
+        jobs: jobNames,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await reconcileAfterSyncFailure(reason, error);
+      throw error;
+    });
   }
 
   if (!syncPromise) {
     syncPromise = runSync(reason)
-      .catch((error) => {
+      .catch(async (error) => {
         logger.error("RNS sync failed", {
           reason,
           error: error instanceof Error ? error.message : String(error),
         });
+        await reconcileAfterSyncFailure(reason, error);
         throw error;
       })
       .finally(() => {
@@ -1774,7 +2311,11 @@ export async function ensureRnsIndexFresh(
   const states = await getRnsSyncStates(config.riseTestnetChainId);
   const head = await client.getBlockNumber();
   const staleCutoff = Date.now() - config.rnsSyncIntervalSeconds * 2 * 1000;
-  const targetStates = states.filter((state) => jobNames.includes(state.jobName as JobName));
+  const targetStates = states.filter(
+    (state) =>
+      jobNames.includes(state.jobName as JobName) &&
+      state.contractAddress.toLowerCase() === getJobContractAddress(state.jobName as JobName).toLowerCase(),
+  );
   const hasAllJobs = jobNames.every((jobName) => targetStates.some((state) => state.jobName === jobName));
   const staleState = targetStates.some((state) => {
     if (!state.lastProcessedAt) return true;
@@ -1787,16 +2328,58 @@ export async function ensureRnsIndexFresh(
   }
 }
 
+function refreshRnsIndexInBackground(
+  reason = "request",
+  jobNames: readonly JobName[] = DEFAULT_JOB_ORDER,
+) {
+  void ensureRnsIndexFresh(reason, jobNames).catch((error) => {
+    logger.warn("RNS background refresh failed", {
+      reason,
+      jobs: jobNames,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 export function startRnsJobs() {
   if (jobsStarted) return;
   jobsStarted = true;
 
-  void ensureRnsSync("startup");
+  void ensureRnsSync("startup").catch((error) => {
+    logger.warn("RNS startup sync did not complete", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  void ensureRnsReconciliation("startup").catch((error) => {
+    logger.warn("RNS startup reconciliation did not complete", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  void ensureRnsMarketplaceSnapshot("startup", true).catch((error) => {
+    logger.warn("RNS startup marketplace snapshot did not complete", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 
   const syncTimer = setInterval(() => {
-    void ensureRnsSync("interval");
+    void ensureRnsSync("interval").catch((error) => {
+      logger.warn("RNS interval sync did not complete", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }, config.rnsSyncIntervalSeconds * 1000);
   syncTimer.unref?.();
+
+  const marketplaceSnapshotTimer = setInterval(() => {
+    void ensureRnsMarketplaceSnapshot("interval").catch((error) => {
+      logger.warn("RNS marketplace snapshot did not complete", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, 30_000);
+  marketplaceSnapshotTimer.unref?.();
 
   const reconcileTimer = setInterval(() => {
     void ensureRnsReconciliation("interval");
@@ -1809,7 +2392,12 @@ export async function listOwnedRnsNames(owner: string, chainId: number) {
     return [];
   }
 
-  await ensureRnsIndexFresh("names-read", WALLET_NAME_JOB_ORDER);
+  await ensureRnsMarketplaceSnapshot("names-read").catch((error) => {
+    logger.warn("RNS names read is using the last marketplace snapshot", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  refreshRnsIndexInBackground("names-read", WALLET_NAME_JOB_ORDER);
   const normalizedOwner = getAddress(owner).toLowerCase();
   const nowUnix = BigInt(Math.floor(Date.now() / 1000));
   const names = await getRnsOwnedNames({
@@ -1915,13 +2503,194 @@ export function normalizeRnsLabel(input: string) {
   return label;
 }
 
+async function getRnsReadHead(reason: string) {
+  try {
+    return await client.getBlockNumber();
+  } catch (error) {
+    const states = await getRnsSyncStates(config.riseTestnetChainId);
+    const fallbackBlock = states.reduce(
+      (max, state) => (state.lastProcessedBlock > max ? state.lastProcessedBlock : max),
+      ACTIVE_RNS_REGISTRAR_START_BLOCK,
+    );
+    logger.warn("RNS direct label reconciliation could not read latest block; using indexed head", {
+      reason,
+      fallbackBlock: fallbackBlock.toString(),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return fallbackBlock;
+  }
+}
+
+export async function reconcileRnsKnownLabel(input: {
+  label: string;
+  chainId: number;
+  reason?: string;
+}) {
+  await assertRnsContractConfiguration();
+  if (input.chainId !== config.riseTestnetChainId) return null;
+
+  const label = normalizeRnsLabel(input.label);
+  if (!label) return null;
+
+  const reason = input.reason ?? "known-label";
+  const node = namehash(`${label}.rise`) as `0x${string}`;
+  const fqdn = `${label}.rise`;
+  const head = await getRnsReadHead(reason);
+
+  let owner: `0x${string}` | null = null;
+  let ownerKnown = false;
+  let resolver: `0x${string}` | null = null;
+  let resolverKnown = false;
+  let resolvedAddress: `0x${string}` | null = null;
+  let resolvedAddressKnown = false;
+  let expiry: bigint | null = null;
+
+  try {
+    const ownerRaw = await client.readContract({
+      address: config.rnsContracts.registry as `0x${string}`,
+      abi: registryReadAbi,
+      functionName: "owner",
+      args: [node],
+    });
+    owner = (toLowerHex(ownerRaw as `0x${string}`) ?? ZERO_ADDRESS) as `0x${string}`;
+    ownerKnown = true;
+  } catch (error) {
+    logger.warn("RNS known-label owner read failed", {
+      reason,
+      label,
+      node,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    const expiryRaw = await client.readContract({
+      address: config.rnsContracts.registrar as `0x${string}`,
+      abi: registrarReadAbi,
+      functionName: "expiryOf",
+      args: [label],
+    });
+    expiry = expiryRaw as bigint;
+  } catch (error) {
+    logger.warn("RNS known-label expiry read failed", {
+      reason,
+      label,
+      node,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    const resolverRaw = await client.readContract({
+      address: config.rnsContracts.registry as `0x${string}`,
+      abi: registryReadAbi,
+      functionName: "resolver",
+      args: [node],
+    });
+    const nextResolver = toLowerHex(resolverRaw as `0x${string}`);
+    resolver = isZeroAddress(nextResolver) ? null : (nextResolver as `0x${string}`);
+    resolverKnown = true;
+  } catch {
+    resolver = null;
+  }
+
+  if (resolverKnown && resolver) {
+    try {
+      const addrRaw = await client.readContract({
+        address: resolver,
+        abi: resolverReadAbi,
+        functionName: "addr",
+        args: [node],
+      });
+      const nextAddress = toLowerHex(addrRaw as `0x${string}`);
+      resolvedAddress = isZeroAddress(nextAddress) ? null : (nextAddress as `0x${string}`);
+      resolvedAddressKnown = true;
+    } catch {
+      resolvedAddress = null;
+    }
+  } else if (resolverKnown) {
+    resolvedAddress = null;
+    resolvedAddressKnown = true;
+  }
+
+  if (!ownerKnown && expiry === null) return null;
+
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+
+    const verifiedOwner = owner ?? (ZERO_ADDRESS as `0x${string}`);
+    const verifiedExpiry = expiry ?? 0n;
+    const active = !isZeroAddress(verifiedOwner) || verifiedExpiry > 0n;
+
+    if (active && ownerKnown) {
+      await upsertRnsKnownLabelSnapshot(db, {
+        chainId: input.chainId,
+        node,
+        label,
+        fqdn,
+        owner: verifiedOwner,
+        resolver,
+        resolvedAddress,
+        expiry: verifiedExpiry,
+        blockNumber: head,
+        minRegisteredBlock: ACTIVE_RNS_REGISTRAR_START_BLOCK,
+        resolverKnown,
+        resolvedAddressKnown,
+      });
+    } else {
+      await applyRnsReconciliation(db, {
+        chainId: input.chainId,
+        node,
+        label,
+        fqdn,
+        owner: ownerKnown ? verifiedOwner : null,
+        resolver,
+        resolvedAddress,
+        expiry,
+        updatedBlock: head,
+        ownerKnown,
+        resolverKnown,
+        resolvedAddressKnown,
+      });
+    }
+
+    await db.query("commit");
+  } catch (error) {
+    await db.query("rollback");
+    throw error;
+  } finally {
+    db.release();
+  }
+
+  return getRnsNameByLabel({
+    chainId: input.chainId,
+    label,
+    minRegisteredBlock: ACTIVE_RNS_REGISTRAR_START_BLOCK,
+  });
+}
+
 export async function resolveRnsName(input: { name: string; chainId: number }) {
   if (input.chainId !== config.riseTestnetChainId) return null;
 
   const label = normalizeRnsLabel(input.name);
   if (!label) return null;
 
-  await ensureRnsIndexFresh("public-name-read", NAME_JOB_ORDER);
+  refreshRnsIndexInBackground("public-name-read", NAME_JOB_ORDER);
+
+  const repaired = await reconcileRnsKnownLabel({
+    label,
+    chainId: input.chainId,
+    reason: "public-name-read",
+  }).catch((error) => {
+    logger.warn("RNS public name direct reconciliation failed", {
+      label,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  });
+  if (repaired) return repaired;
+
   return getRnsNameByLabel({
     chainId: input.chainId,
     label,
@@ -1932,7 +2701,7 @@ export async function resolveRnsName(input: { name: string; chainId: number }) {
 export async function resolveRnsPrimaryName(input: { address: string; chainId: number }) {
   if (input.chainId !== config.riseTestnetChainId) return null;
 
-  await ensureRnsIndexFresh("public-address-read", NAME_JOB_ORDER);
+  refreshRnsIndexInBackground("public-address-read", NAME_JOB_ORDER);
   return getRnsPrimaryNameForAddress({
     chainId: input.chainId,
     address: getAddress(input.address).toLowerCase(),
@@ -1950,7 +2719,12 @@ export async function getRnsIndexHealth() {
   return {
     chainId: config.riseTestnetChainId,
     namesIndexed: nameCount,
-    jobs: states.map((state) => ({
+    jobs: states
+      .filter(
+        (state) =>
+          state.contractAddress.toLowerCase() === getJobContractAddress(state.jobName as JobName).toLowerCase(),
+      )
+      .map((state) => ({
       jobName: state.jobName,
       chainId: state.chainId,
       contractAddress: state.contractAddress,
@@ -1958,7 +2732,7 @@ export async function getRnsIndexHealth() {
       lastProcessedBlockHash: state.lastProcessedBlockHash,
       lastProcessedAt: state.lastProcessedAt,
       updatedAt: state.updatedAt,
-    })),
+      })),
   };
 }
 
@@ -2065,28 +2839,43 @@ function serializeMarketplaceEventRecord(event: RnsMarketplaceEventRecord) {
 
 export async function listRnsPrimaryAuctions(chainId: number, limit = 50) {
   if (chainId !== config.riseTestnetChainId) return [];
-  await ensureRnsIndexFresh("primary-auctions-read");
+  await ensureRnsMarketplaceSnapshot("primary-auctions-read").catch((error) => {
+    logger.warn("RNS primary auctions read is using the last snapshot", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  refreshRnsIndexInBackground("primary-auctions-read", ["primary_auction"]);
   const auctions = await getRnsPrimaryAuctions({ chainId, limit });
   return auctions.map(serializePrimaryAuctionRecord);
 }
 
 export async function listRnsMarketplaceListings(chainId: number, limit = 50) {
   if (chainId !== config.riseTestnetChainId) return [];
-  await ensureRnsIndexFresh("marketplace-listings-read");
+  await ensureRnsMarketplaceSnapshot("marketplace-listings-read").catch((error) => {
+    logger.warn("RNS marketplace listings read is using the last snapshot", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  refreshRnsIndexInBackground("marketplace-listings-read", ["marketplace"]);
   const listings = await getRnsMarketplaceListings({ chainId, limit });
   return listings.map(serializeMarketplaceListingRecord);
 }
 
 export async function listRnsMarketplaceAuctions(chainId: number, limit = 50) {
   if (chainId !== config.riseTestnetChainId) return [];
-  await ensureRnsIndexFresh("marketplace-auctions-read");
+  await ensureRnsMarketplaceSnapshot("marketplace-auctions-read").catch((error) => {
+    logger.warn("RNS marketplace auctions read is using the last snapshot", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  refreshRnsIndexInBackground("marketplace-auctions-read", ["marketplace"]);
   const auctions = await getRnsMarketplaceAuctions({ chainId, limit });
   return auctions.map(serializeMarketplaceAuctionRecord);
 }
 
 export async function listRnsMarketplaceActivity(chainId: number, limit = 50) {
   if (chainId !== config.riseTestnetChainId) return [];
-  await ensureRnsIndexFresh("marketplace-activity-read");
+  refreshRnsIndexInBackground("marketplace-activity-read", ["primary_auction", "marketplace"]);
   const events = await getRnsMarketplaceEvents({ chainId, limit });
   return events.map(serializeMarketplaceEventRecord);
 }

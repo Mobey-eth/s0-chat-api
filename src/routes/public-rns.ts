@@ -316,10 +316,10 @@ export async function registerPublicRnsRoutes(app: FastifyInstance) {
     const parsed = parseReservedListQuery(request.query);
     if (!parsed.ok) return reply.code(400).send(parsed.error);
 
-    const names = await listRnsReservedNames({
+    const names = (await listRnsReservedNames({
       chainId: parsed.chainId,
       enabledOnly: true,
-    });
+    })).filter((name) => name.activatedAt !== null);
     setPublicRnsCache(reply);
 
     return reply.send({
@@ -334,8 +334,12 @@ export async function registerPublicRnsRoutes(app: FastifyInstance) {
         saleMode: name.saleMode,
         reservePriceWei: name.reservePrice?.toString() ?? null,
         fixedPriceWei: name.fixedPrice?.toString() ?? null,
+        auctionDurationSeconds: name.auctionDurationSeconds.toString(),
         notes: name.notes,
         displayOrder: name.displayOrder,
+        primaryAuctionId: name.primaryAuctionId?.toString() ?? null,
+        activationTxHash: name.activationTxHash,
+        activatedAt: name.activatedAt,
         createdAt: name.createdAt,
         updatedAt: name.updatedAt,
       })),

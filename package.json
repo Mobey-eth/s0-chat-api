@@ -12,6 +12,8 @@
     "db:migrate:prod": "node dist/migrate.js",
     "rns:reset-index": "tsx src/rns/reset-index.ts",
     "rns:reset-index:prod": "node dist/rns/reset-index.js",
+    "rns:reconcile-labels": "tsx src/rns/reconcile-labels.ts",
+    "rns:reconcile-labels:prod": "node dist/rns/reconcile-labels.js",
     "docs:sync": "sh -c 'if [ -f dist/sync/gitbook.js ]; then node dist/sync/gitbook.js; else tsx src/sync/gitbook.ts; fi'"
   },
   "dependencies": {

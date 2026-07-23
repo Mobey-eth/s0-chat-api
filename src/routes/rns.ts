@@ -1,15 +1,26 @@
 import type { FastifyInstance } from "fastify";
+import {
+  createPublicClient,
+  decodeFunctionData,
+  http,
+  keccak256,
+  parseAbi,
+  stringToBytes,
+} from "viem";
 import { z } from "zod";
 import { config } from "../config.js";
 import { buildRnsPriceQuote, getRnsPricingSummary } from "../rns/pricing.js";
 import {
   listRnsReservedNames,
+  getRnsReservedNameById,
+  markRnsReservedNameActivated,
   type RnsReservedSaleMode,
   upsertRnsNotificationSubscription,
   upsertRnsReservedName,
 } from "../rns/store.js";
 import {
   computeRnsNode,
+  ensureRnsMarketplaceSnapshot,
   listOwnedRnsNames,
   normalizeRnsLabel,
   serializeRnsNameRecord,
@@ -33,7 +44,7 @@ const pricingQuerySchema = querySchema.extend({
 });
 
 const quoteBodySchema = z.object({
-  action: z.enum(["register", "renew"]),
+  action: z.enum(["register", "renew", "fixed_premium_register"]),
   name: z.string().min(1).max(80),
   beneficiary: z.string().regex(ADDRESS_RE),
   chainId: z.coerce.number().int().positive().optional(),
@@ -56,6 +67,9 @@ const reservedQuerySchema = z.object({
   chainId: z.coerce.number().int().positive().optional(),
 });
 
+const MIN_AUCTION_DURATION_SECONDS = 24n * 60n * 60n;
+const MAX_AUCTION_DURATION_SECONDS = 10n * 365n * 24n * 60n * 60n;
+
 const reservedBodySchema = z.object({
   chainId: z.coerce.number().int().positive().optional(),
   label: z.string().min(1).max(80),
@@ -68,9 +82,30 @@ const reservedBodySchema = z.object({
   fixedPriceWei: z
     .union([z.string().regex(/^\d+$/), z.number().int().nonnegative(), z.null()])
     .optional(),
+  auctionDurationSeconds: z
+    .union([z.string().regex(/^\d+$/), z.number().int().positive()])
+    .optional(),
   notes: z.string().max(500).nullable().optional(),
   displayOrder: z.coerce.number().int().min(0).max(100_000).optional(),
 });
+
+const reservedActivationBodySchema = z.object({
+  chainId: z.coerce.number().int().positive().optional(),
+  id: z.coerce.number().int().positive(),
+  txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+});
+
+const activationClient = createPublicClient({
+  transport: http(config.riseTestnetRpcUrl),
+});
+
+const reservedActivationRegistrarAbi = parseAbi([
+  "function setLabelPolicy(bytes32 labelHash, uint8 policy)",
+]);
+
+const reservedActivationAuctionAbi = parseAbi([
+  "function createAuction(string name,uint256 duration,uint256 reservePrice,uint96 minIncrementBps,uint64 startTime,uint64 endTime) returns (uint256 auctionId)",
+]);
 
 function serializeReservedNameRecord(record: {
   id: number;
@@ -82,8 +117,12 @@ function serializeReservedNameRecord(record: {
   saleMode: RnsReservedSaleMode;
   reservePrice: bigint | null;
   fixedPrice: bigint | null;
+  auctionDurationSeconds: bigint;
   notes: string | null;
   displayOrder: number;
+  primaryAuctionId: bigint | null;
+  activationTxHash: `0x${string}` | null;
+  activatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }) {
@@ -97,8 +136,12 @@ function serializeReservedNameRecord(record: {
     saleMode: record.saleMode,
     reservePriceWei: record.reservePrice?.toString() ?? null,
     fixedPriceWei: record.fixedPrice?.toString() ?? null,
+    auctionDurationSeconds: record.auctionDurationSeconds.toString(),
     notes: record.notes,
     displayOrder: record.displayOrder,
+    primaryAuctionId: record.primaryAuctionId?.toString() ?? null,
+    activationTxHash: record.activationTxHash,
+    activatedAt: record.activatedAt,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
@@ -359,6 +402,20 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       parsedBody.data.fixedPriceWei === null || parsedBody.data.fixedPriceWei === undefined
         ? null
         : BigInt(parsedBody.data.fixedPriceWei);
+    const auctionDurationSeconds =
+      parsedBody.data.auctionDurationSeconds === undefined
+        ? undefined
+        : BigInt(parsedBody.data.auctionDurationSeconds);
+    if (
+      auctionDurationSeconds !== undefined &&
+      (auctionDurationSeconds < MIN_AUCTION_DURATION_SECONDS ||
+        auctionDurationSeconds > MAX_AUCTION_DURATION_SECONDS)
+    ) {
+      return reply.code(400).send({
+        error: "invalid_reserved_request",
+        detail: "Auction duration must be between 1 day and 10 years.",
+      });
+    }
 
     const record = await upsertRnsReservedName({
       chainId,
@@ -368,6 +425,7 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       saleMode,
       reservePrice,
       fixedPrice,
+      auctionDurationSeconds,
       notes: parsedBody.data.notes,
       displayOrder: parsedBody.data.displayOrder,
     });
@@ -376,5 +434,115 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       ok: true,
       name: serializeReservedNameRecord(record),
     });
+  });
+
+  app.post("/api/rns/admin/reserved/activate", async (request, reply) => {
+    const parsedBody = reservedActivationBodySchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      return reply.code(400).send({
+        error: "invalid_reserved_activation",
+        detail: "Provide a reserved name id and confirmed transaction hash.",
+      });
+    }
+
+    const chainId = parsedBody.data.chainId ?? config.riseTestnetChainId;
+    if (chainId !== config.riseTestnetChainId) {
+      return reply.code(400).send({
+        error: "unsupported_chain",
+        detail: `Only chainId ${config.riseTestnetChainId} is supported right now.`,
+      });
+    }
+
+    const reserved = await getRnsReservedNameById({ chainId, id: parsedBody.data.id });
+    if (!reserved) {
+      return reply.code(404).send({
+        error: "reserved_name_not_found",
+        detail: "That reserved name does not exist.",
+      });
+    }
+
+    try {
+      const txHash = parsedBody.data.txHash as `0x${string}`;
+      const [transaction, receipt] = await Promise.all([
+        activationClient.getTransaction({ hash: txHash }),
+        activationClient.getTransactionReceipt({ hash: txHash }),
+      ]);
+
+      if (receipt.status !== "success") {
+        return reply.code(400).send({
+          error: "reserved_activation_reverted",
+          detail: "The publication transaction did not succeed.",
+        });
+      }
+
+      if (reserved.saleMode === "buy_now") {
+        if (transaction.to?.toLowerCase() !== config.rnsContracts.registrar.toLowerCase()) {
+          return reply.code(400).send({
+            error: "invalid_reserved_activation",
+            detail: "Fixed-price publication must update the RNS registrar policy.",
+          });
+        }
+        const decoded = decodeFunctionData({
+          abi: reservedActivationRegistrarAbi,
+          data: transaction.input,
+        });
+        const [labelHash, policy] = decoded.args;
+        const expectedLabelHash = keccak256(stringToBytes(reserved.label));
+        if (
+          decoded.functionName !== "setLabelPolicy" ||
+          labelHash.toLowerCase() !== expectedLabelHash.toLowerCase() ||
+          Number(policy) !== 3
+        ) {
+          return reply.code(400).send({
+            error: "invalid_reserved_activation",
+            detail: "The transaction does not publish this name as a fixed-price sale.",
+          });
+        }
+      } else {
+        if (transaction.to?.toLowerCase() !== config.rnsContracts.auctionHouse.toLowerCase()) {
+          return reply.code(400).send({
+            error: "invalid_reserved_activation",
+            detail: "Auction publication must create an RNS primary auction.",
+          });
+        }
+        const decoded = decodeFunctionData({
+          abi: reservedActivationAuctionAbi,
+          data: transaction.input,
+        });
+        const [auctionName, , reservePrice, , startTime, endTime] = decoded.args;
+        const submittedDuration = BigInt(endTime) - BigInt(startTime);
+        if (
+          decoded.functionName !== "createAuction" ||
+          normalizeRnsLabel(auctionName) !== reserved.label ||
+          BigInt(reservePrice) !== reserved.reservePrice ||
+          submittedDuration !== reserved.auctionDurationSeconds
+        ) {
+          return reply.code(400).send({
+            error: "invalid_reserved_activation",
+            detail: "The transaction does not match this name's saved auction price and duration.",
+          });
+        }
+      }
+
+      await markRnsReservedNameActivated({
+        chainId,
+        id: reserved.id,
+        txHash,
+      });
+      if (reserved.saleMode === "auction") {
+        await ensureRnsMarketplaceSnapshot("reserved-activation", true);
+      }
+      const activated = await getRnsReservedNameById({ chainId, id: reserved.id });
+
+      return reply.send({
+        ok: true,
+        name: activated ? serializeReservedNameRecord(activated) : null,
+      });
+    } catch (error) {
+      return reply.code(400).send({
+        error: "invalid_reserved_activation",
+        detail: error instanceof Error ? error.message : "Could not verify the publication transaction.",
+      });
+    }
   });
 }

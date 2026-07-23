@@ -201,8 +201,12 @@ export interface RnsReservedNameRecord {
   saleMode: RnsReservedSaleMode;
   reservePrice: bigint | null;
   fixedPrice: bigint | null;
+  auctionDurationSeconds: bigint;
   notes: string | null;
   displayOrder: number;
+  primaryAuctionId: bigint | null;
+  activationTxHash: `0x${string}` | null;
+  activatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -434,8 +438,12 @@ function toReservedNameRecord(row: {
   sale_mode: RnsReservedSaleMode;
   reserve_price_wei: string | null;
   fixed_price_wei: string | null;
+  auction_duration_seconds: string;
   notes: string | null;
   display_order: number;
+  primary_auction_id?: string | null;
+  activation_tx_hash?: string | null;
+  activated_at?: string | null;
   created_at: string;
   updated_at: string;
 }): RnsReservedNameRecord {
@@ -449,8 +457,12 @@ function toReservedNameRecord(row: {
     saleMode: row.sale_mode,
     reservePrice: row.reserve_price_wei ? BigInt(row.reserve_price_wei) : null,
     fixedPrice: row.fixed_price_wei ? BigInt(row.fixed_price_wei) : null,
+    auctionDurationSeconds: BigInt(row.auction_duration_seconds),
     notes: row.notes,
     displayOrder: row.display_order,
+    primaryAuctionId: row.primary_auction_id ? BigInt(row.primary_auction_id) : null,
+    activationTxHash: row.activation_tx_hash as `0x${string}` | null,
+    activatedAt: row.activated_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -510,9 +522,8 @@ export async function upsertRnsSyncState(input: {
         last_processed_at
       )
       values ($1, $2, lower($3), $4, $5, now())
-      on conflict (job_name, chain_id)
+      on conflict (job_name, chain_id, contract_address)
       do update set
-        contract_address = excluded.contract_address,
         last_processed_block = greatest(stage0_rns.sync_state.last_processed_block, excluded.last_processed_block),
         last_processed_block_hash = case
           when excluded.last_processed_block >= stage0_rns.sync_state.last_processed_block
@@ -577,16 +588,44 @@ export async function upsertRnsRegistration(
         label = coalesce(excluded.label, stage0_rns.names.label),
         fqdn = coalesce(excluded.fqdn, stage0_rns.names.fqdn),
         registrant = excluded.registrant,
-        owner = excluded.owner,
-        expiry = excluded.expiry,
+        owner = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.owner
+          else stage0_rns.names.owner
+        end,
+        expiry = greatest(stage0_rns.names.expiry, excluded.expiry),
         resolver = coalesce(excluded.resolver, stage0_rns.names.resolver),
-        registered_tx_hash = excluded.registered_tx_hash,
-        registered_block = excluded.registered_block,
-        registered_at = excluded.registered_at,
-        released_tx_hash = null,
-        released_block = null,
-        released_at = null,
-        updated_block = excluded.updated_block,
+        registered_tx_hash = case
+          when stage0_rns.names.registered_tx_hash is null
+            or excluded.registered_block >= coalesce(stage0_rns.names.registered_block, 0)
+          then excluded.registered_tx_hash
+          else stage0_rns.names.registered_tx_hash
+        end,
+        registered_block = case
+          when stage0_rns.names.registered_block is null
+            or excluded.registered_block >= coalesce(stage0_rns.names.registered_block, 0)
+            or stage0_rns.names.registered_tx_hash is null
+          then excluded.registered_block
+          else stage0_rns.names.registered_block
+        end,
+        registered_at = case
+          when stage0_rns.names.registered_at is null
+            or excluded.registered_block >= coalesce(stage0_rns.names.registered_block, 0)
+          then excluded.registered_at
+          else stage0_rns.names.registered_at
+        end,
+        released_tx_hash = case
+          when excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_tx_hash
+        end,
+        released_block = case
+          when excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_block
+        end,
+        released_at = case
+          when excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_at
+        end,
+        updated_block = greatest(stage0_rns.names.updated_block, excluded.updated_block),
         updated_at = now()
     `,
     [
@@ -642,14 +681,29 @@ export async function applyRnsRenewal(
       do update set
         label = coalesce(stage0_rns.names.label, excluded.label),
         fqdn = coalesce(stage0_rns.names.fqdn, excluded.fqdn),
-        expiry = excluded.expiry,
-        renewed_tx_hash = excluded.renewed_tx_hash,
-        renewed_block = excluded.renewed_block,
-        renewed_at = excluded.renewed_at,
-        released_tx_hash = null,
-        released_block = null,
-        released_at = null,
-        updated_block = excluded.updated_block,
+        expiry = greatest(stage0_rns.names.expiry, excluded.expiry),
+        renewed_tx_hash = case
+          when excluded.renewed_block >= coalesce(stage0_rns.names.renewed_block, 0) then excluded.renewed_tx_hash
+          else stage0_rns.names.renewed_tx_hash
+        end,
+        renewed_block = greatest(coalesce(stage0_rns.names.renewed_block, 0), excluded.renewed_block),
+        renewed_at = case
+          when excluded.renewed_block >= coalesce(stage0_rns.names.renewed_block, 0) then excluded.renewed_at
+          else stage0_rns.names.renewed_at
+        end,
+        released_tx_hash = case
+          when excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_tx_hash
+        end,
+        released_block = case
+          when excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_block
+        end,
+        released_at = case
+          when excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_at
+        end,
+        updated_block = greatest(stage0_rns.names.updated_block, excluded.updated_block),
         updated_at = now()
     `,
     [
@@ -699,12 +753,31 @@ export async function applyRnsRelease(
       do update set
         label = coalesce(stage0_rns.names.label, excluded.label),
         fqdn = coalesce(stage0_rns.names.fqdn, excluded.fqdn),
-        owner = excluded.owner,
-        resolved_address = null,
-        released_tx_hash = excluded.released_tx_hash,
-        released_block = excluded.released_block,
-        released_at = excluded.released_at,
-        updated_block = excluded.updated_block,
+        owner = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.owner
+          else stage0_rns.names.owner
+        end,
+        expiry = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then 0
+          else stage0_rns.names.expiry
+        end,
+        resolved_address = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then null
+          else stage0_rns.names.resolved_address
+        end,
+        released_tx_hash = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.released_tx_hash
+          else stage0_rns.names.released_tx_hash
+        end,
+        released_block = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.released_block
+          else stage0_rns.names.released_block
+        end,
+        released_at = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.released_at
+          else stage0_rns.names.released_at
+        end,
+        updated_block = greatest(stage0_rns.names.updated_block, excluded.updated_block),
         updated_at = now()
     `,
     [
@@ -743,8 +816,11 @@ export async function applyRnsOwnerTransfer(
       values ($1, lower($2), $3, lower($4), 0, $5, now())
       on conflict (chain_id, node)
       do update set
-        owner = excluded.owner,
-        updated_block = excluded.updated_block,
+        owner = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.owner
+          else stage0_rns.names.owner
+        end,
+        updated_block = greatest(stage0_rns.names.updated_block, excluded.updated_block),
         updated_at = now()
     `,
     [input.chainId, input.node, ZERO_ADDRESS, input.owner, input.blockNumber.toString()],
@@ -776,9 +852,16 @@ export async function applyRnsResolverUpdate(
       values ($1, lower($2), $3, $3, 0, lower($4), null, $5, now())
       on conflict (chain_id, node)
       do update set
-        resolver = excluded.resolver,
-        resolved_address = case when excluded.resolver is null then null else stage0_rns.names.resolved_address end,
-        updated_block = excluded.updated_block,
+        resolver = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.resolver
+          else stage0_rns.names.resolver
+        end,
+        resolved_address = case
+          when excluded.updated_block < stage0_rns.names.updated_block then stage0_rns.names.resolved_address
+          when excluded.resolver is null then null
+          else stage0_rns.names.resolved_address
+        end,
+        updated_block = greatest(stage0_rns.names.updated_block, excluded.updated_block),
         updated_at = now()
     `,
     [input.chainId, input.node, ZERO_ADDRESS, input.resolver, input.blockNumber.toString()],
@@ -809,8 +892,11 @@ export async function applyRnsResolvedAddressUpdate(
       values ($1, lower($2), $3, $3, 0, lower($4), $5, now())
       on conflict (chain_id, node)
       do update set
-        resolved_address = excluded.resolved_address,
-        updated_block = excluded.updated_block,
+        resolved_address = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.resolved_address
+          else stage0_rns.names.resolved_address
+        end,
+        updated_block = greatest(stage0_rns.names.updated_block, excluded.updated_block),
         updated_at = now()
     `,
     [input.chainId, input.node, ZERO_ADDRESS, input.resolvedAddress, input.blockNumber.toString()],
@@ -824,11 +910,14 @@ export async function applyRnsReconciliation(
     node: `0x${string}`;
     label: string | null;
     fqdn: string | null;
-    owner: `0x${string}`;
+    owner: `0x${string}` | null;
     resolver: `0x${string}` | null;
     resolvedAddress: `0x${string}` | null;
     expiry: bigint | null;
     updatedBlock: bigint;
+    ownerKnown: boolean;
+    resolverKnown: boolean;
+    resolvedAddressKnown: boolean;
   },
 ) {
   await db.query(
@@ -846,16 +935,30 @@ export async function applyRnsReconciliation(
         updated_block,
         updated_at
       )
-      values ($1, lower($2), $3, $4, $5, lower($6), $7, lower($8), lower($9), $10, now())
+      values ($1, lower($2), $3, $4, $5, coalesce(lower($6), $14), coalesce($7, 0), lower($8), lower($9), $10, now())
       on conflict (chain_id, node)
       do update set
         label = coalesce(excluded.label, stage0_rns.names.label),
         fqdn = coalesce(excluded.fqdn, stage0_rns.names.fqdn),
-        owner = excluded.owner,
-        expiry = coalesce(excluded.expiry, stage0_rns.names.expiry),
-        resolver = excluded.resolver,
-        resolved_address = excluded.resolved_address,
-        updated_block = excluded.updated_block,
+        owner = case
+          when $11 and excluded.updated_block >= stage0_rns.names.updated_block then excluded.owner
+          else stage0_rns.names.owner
+        end,
+        expiry = case
+          when excluded.expiry is not null
+            and (excluded.updated_block >= stage0_rns.names.updated_block or excluded.expiry > stage0_rns.names.expiry)
+          then excluded.expiry
+          else stage0_rns.names.expiry
+        end,
+        resolver = case
+          when $12 and excluded.updated_block >= stage0_rns.names.updated_block then excluded.resolver
+          else stage0_rns.names.resolver
+        end,
+        resolved_address = case
+          when $13 and excluded.updated_block >= stage0_rns.names.updated_block then excluded.resolved_address
+          else stage0_rns.names.resolved_address
+        end,
+        updated_block = greatest(stage0_rns.names.updated_block, excluded.updated_block),
         updated_at = now()
     `,
     [
@@ -869,6 +972,108 @@ export async function applyRnsReconciliation(
       input.resolver,
       input.resolvedAddress,
       input.updatedBlock.toString(),
+      input.ownerKnown,
+      input.resolverKnown,
+      input.resolvedAddressKnown,
+      ZERO_ADDRESS,
+    ],
+  );
+}
+
+export async function upsertRnsKnownLabelSnapshot(
+  db: Queryable,
+  input: {
+    chainId: number;
+    node: `0x${string}`;
+    label: string;
+    fqdn: string;
+    owner: `0x${string}`;
+    resolver: `0x${string}` | null;
+    resolvedAddress: `0x${string}` | null;
+    expiry: bigint;
+    blockNumber: bigint;
+    minRegisteredBlock: bigint;
+    resolverKnown: boolean;
+    resolvedAddressKnown: boolean;
+  },
+) {
+  await db.query(
+    `
+      insert into stage0_rns.names (
+        chain_id,
+        node,
+        label,
+        fqdn,
+        registrant,
+        owner,
+        expiry,
+        resolver,
+        resolved_address,
+        registered_block,
+        updated_block,
+        updated_at
+      )
+      values ($1, lower($2), lower($3), lower($4), lower($5), lower($5), $6, lower($7), lower($8), $9, $10, now())
+      on conflict (chain_id, node)
+      do update set
+        label = excluded.label,
+        fqdn = excluded.fqdn,
+        registrant = case
+          when stage0_rns.names.registrant = $11 then excluded.registrant
+          else stage0_rns.names.registrant
+        end,
+        owner = case
+          when excluded.updated_block >= stage0_rns.names.updated_block then excluded.owner
+          else stage0_rns.names.owner
+        end,
+        expiry = case
+          when excluded.updated_block >= stage0_rns.names.updated_block or excluded.expiry > stage0_rns.names.expiry
+          then excluded.expiry
+          else stage0_rns.names.expiry
+        end,
+        resolver = case
+          when $12 and excluded.updated_block >= stage0_rns.names.updated_block then excluded.resolver
+          else coalesce(stage0_rns.names.resolver, excluded.resolver)
+        end,
+        resolved_address = case
+          when $13 and excluded.updated_block >= stage0_rns.names.updated_block then excluded.resolved_address
+          else coalesce(stage0_rns.names.resolved_address, excluded.resolved_address)
+        end,
+        registered_block = case
+          when stage0_rns.names.registered_block is null
+            or stage0_rns.names.registered_block < $9
+          then excluded.registered_block
+          else stage0_rns.names.registered_block
+        end,
+        released_tx_hash = case
+          when excluded.expiry > 0 and excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_tx_hash
+        end,
+        released_block = case
+          when excluded.expiry > 0 and excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_block
+        end,
+        released_at = case
+          when excluded.expiry > 0 and excluded.updated_block >= coalesce(stage0_rns.names.released_block, 0) then null
+          else stage0_rns.names.released_at
+        end,
+        updated_block = greatest(stage0_rns.names.updated_block, excluded.updated_block),
+        updated_at = now()
+    `,
+    [
+      input.chainId,
+      input.node,
+      input.label,
+      input.fqdn,
+      input.owner,
+      input.expiry.toString(),
+      input.resolver,
+      input.resolvedAddress,
+      input.minRegisteredBlock.toString(),
+      input.blockNumber.toString(),
+      ZERO_ADDRESS,
+      input.resolverKnown,
+      input.resolvedAddressKnown,
     ],
   );
 }
@@ -1435,6 +1640,7 @@ export async function upsertRnsPrimaryAuction(
         created_at = excluded.created_at,
         updated_block = excluded.updated_block,
         updated_at = now()
+      where stage0_rns.primary_auctions.updated_block <= excluded.updated_block
     `,
     [
       input.chainId,
@@ -1448,6 +1654,88 @@ export async function upsertRnsPrimaryAuction(
       input.txHash,
       input.blockNumber.toString(),
       input.blockTime.toISOString(),
+    ],
+  );
+}
+
+export async function upsertRnsPrimaryAuctionSnapshot(
+  db: Queryable,
+  input: {
+    chainId: number;
+    auctionId: bigint;
+    name: string;
+    duration: bigint;
+    reservePrice: bigint;
+    startTime: bigint;
+    endTime: bigint;
+    currentExtensionWindow: bigint;
+    bidCount: number;
+    highestBidder: `0x${string}` | null;
+    highestBid: bigint;
+    status: string;
+    winner: `0x${string}` | null;
+    settledAmount: bigint | null;
+    blockNumber: bigint;
+  },
+) {
+  await db.query(
+    `
+      insert into stage0_rns.primary_auctions (
+        chain_id,
+        auction_id,
+        name,
+        fqdn,
+        duration,
+        reserve_price,
+        start_time,
+        end_time,
+        current_extension_window,
+        bid_count,
+        highest_bidder,
+        highest_bid,
+        status,
+        winner,
+        settled_amount,
+        updated_block,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, lower($11), $12, $13, lower($14), $15, $16, now())
+      on conflict (chain_id, auction_id)
+      do update set
+        name = excluded.name,
+        fqdn = excluded.fqdn,
+        duration = excluded.duration,
+        reserve_price = excluded.reserve_price,
+        start_time = excluded.start_time,
+        end_time = excluded.end_time,
+        current_extension_window = excluded.current_extension_window,
+        bid_count = excluded.bid_count,
+        highest_bidder = excluded.highest_bidder,
+        highest_bid = excluded.highest_bid,
+        status = excluded.status,
+        winner = excluded.winner,
+        settled_amount = excluded.settled_amount,
+        updated_block = excluded.updated_block,
+        updated_at = now()
+      where stage0_rns.primary_auctions.updated_block <= excluded.updated_block
+    `,
+    [
+      input.chainId,
+      input.auctionId.toString(),
+      input.name,
+      `${input.name}.rise`,
+      input.duration.toString(),
+      input.reservePrice.toString(),
+      input.startTime.toString(),
+      input.endTime.toString(),
+      input.currentExtensionWindow.toString(),
+      input.bidCount,
+      input.highestBidder,
+      input.highestBid.toString(),
+      input.status,
+      input.winner,
+      input.settledAmount?.toString() ?? null,
+      input.blockNumber.toString(),
     ],
   );
 }
@@ -1582,6 +1870,7 @@ export async function upsertRnsMarketplaceListing(
         created_at = excluded.created_at,
         updated_block = excluded.updated_block,
         updated_at = now()
+      where stage0_rns.marketplace_listings.updated_block <= excluded.updated_block
     `,
     [
       input.chainId,
@@ -1594,6 +1883,65 @@ export async function upsertRnsMarketplaceListing(
       input.txHash,
       input.blockNumber.toString(),
       input.blockTime.toISOString(),
+    ],
+  );
+}
+
+export async function upsertRnsMarketplaceListingSnapshot(
+  db: Queryable,
+  input: {
+    chainId: number;
+    listingId: bigint;
+    node: `0x${string}`;
+    name: string;
+    seller: `0x${string}`;
+    price: bigint;
+    active: boolean;
+    blockNumber: bigint;
+  },
+) {
+  await db.query(
+    `
+      insert into stage0_rns.marketplace_listings (
+        chain_id,
+        listing_id,
+        node,
+        name,
+        fqdn,
+        seller,
+        price,
+        status,
+        updated_block,
+        updated_at
+      )
+      values ($1, $2, lower($3), $4, $5, lower($6), $7, $8, $9, now())
+      on conflict (chain_id, listing_id)
+      do update set
+        node = excluded.node,
+        name = excluded.name,
+        fqdn = excluded.fqdn,
+        seller = excluded.seller,
+        price = excluded.price,
+        status = case
+          when excluded.status = 'active' then 'active'
+          when stage0_rns.marketplace_listings.status in ('purchased', 'cancelled')
+            then stage0_rns.marketplace_listings.status
+          else 'inactive'
+        end,
+        updated_block = excluded.updated_block,
+        updated_at = now()
+      where stage0_rns.marketplace_listings.updated_block <= excluded.updated_block
+    `,
+    [
+      input.chainId,
+      input.listingId.toString(),
+      input.node,
+      input.name,
+      `${input.name}.rise`,
+      input.seller,
+      input.price.toString(),
+      input.active ? "active" : "inactive",
+      input.blockNumber.toString(),
     ],
   );
 }
@@ -1693,6 +2041,7 @@ export async function upsertRnsMarketplaceAuction(
         created_at = excluded.created_at,
         updated_block = excluded.updated_block,
         updated_at = now()
+      where stage0_rns.marketplace_auctions.updated_block <= excluded.updated_block
     `,
     [
       input.chainId,
@@ -1707,6 +2056,92 @@ export async function upsertRnsMarketplaceAuction(
       input.txHash,
       input.blockNumber.toString(),
       input.blockTime.toISOString(),
+    ],
+  );
+}
+
+export async function upsertRnsMarketplaceAuctionSnapshot(
+  db: Queryable,
+  input: {
+    chainId: number;
+    auctionId: bigint;
+    node: `0x${string}`;
+    name: string;
+    seller: `0x${string}`;
+    reservePrice: bigint;
+    startTime: bigint;
+    endTime: bigint;
+    currentExtensionWindow: bigint;
+    bidCount: number;
+    highestBidder: `0x${string}` | null;
+    highestBid: bigint;
+    status: string;
+    winner: `0x${string}` | null;
+    settledAmount: bigint | null;
+    blockNumber: bigint;
+  },
+) {
+  await db.query(
+    `
+      insert into stage0_rns.marketplace_auctions (
+        chain_id,
+        auction_id,
+        node,
+        name,
+        fqdn,
+        seller,
+        reserve_price,
+        start_time,
+        end_time,
+        current_extension_window,
+        bid_count,
+        highest_bidder,
+        highest_bid,
+        status,
+        winner,
+        settled_amount,
+        updated_block,
+        updated_at
+      )
+      values ($1, $2, lower($3), $4, $5, lower($6), $7, $8, $9, $10, $11, lower($12), $13, $14, lower($15), $16, $17, now())
+      on conflict (chain_id, auction_id)
+      do update set
+        node = excluded.node,
+        name = excluded.name,
+        fqdn = excluded.fqdn,
+        seller = excluded.seller,
+        reserve_price = excluded.reserve_price,
+        start_time = excluded.start_time,
+        end_time = excluded.end_time,
+        current_extension_window = excluded.current_extension_window,
+        bid_count = excluded.bid_count,
+        highest_bidder = excluded.highest_bidder,
+        highest_bid = excluded.highest_bid,
+        status = excluded.status,
+        winner = excluded.winner,
+        settled_amount = excluded.settled_amount,
+        updated_block = excluded.updated_block,
+        updated_at = now()
+      where stage0_rns.marketplace_auctions.updated_block <= excluded.updated_block
+    `,
+    [
+      input.chainId,
+      input.auctionId.toString(),
+      input.node,
+      input.name,
+      `${input.name}.rise`,
+      input.seller,
+      input.reservePrice.toString(),
+      input.startTime.toString(),
+      input.endTime.toString(),
+      input.currentExtensionWindow.toString(),
+      input.bidCount,
+      input.highestBidder,
+      input.highestBid.toString(),
+      input.status,
+      input.winner,
+      input.settledAmount?.toString() ?? null,
+      input.blockNumber.toString(),
     ],
   );
 }
@@ -2255,6 +2690,7 @@ export async function getRnsMarketplaceSellerSubscriptions(input: {
 export async function getRnsMarketplaceBidderSubscriptions(input: {
   chainId: number;
   auctionId: bigint;
+  name?: string | null;
 }) {
   const result = await pool.query<{
     id: string;
@@ -2289,8 +2725,13 @@ export async function getRnsMarketplaceBidderSubscriptions(input: {
         and scope = 'marketplace_bidder'
         and active = true
         and auction_id = $2
+        and ($3 = '' or lower(name) = $3)
     `,
-    [input.chainId, input.auctionId.toString()],
+    [
+      input.chainId,
+      input.auctionId.toString(),
+      input.name?.trim().toLowerCase().replace(/\.rise$/i, "") ?? "",
+    ],
   );
 
   return result.rows.map(toNotificationSubscription);
@@ -2300,9 +2741,11 @@ export async function getRnsMarketplaceWatcherSubscriptions(input: {
   chainId: number;
   node?: `0x${string}` | null;
   auctionId?: bigint | null;
+  name?: string | null;
 }) {
   const nodeNormalized = input.node?.toLowerCase() ?? "";
   const auctionId = input.auctionId ?? 0n;
+  const nameNormalized = input.name?.trim().toLowerCase().replace(/\.rise$/i, "") ?? "";
   const result = await pool.query<{
     id: string;
     chain_id: number;
@@ -2338,9 +2781,10 @@ export async function getRnsMarketplaceWatcherSubscriptions(input: {
         and (
           ($2 <> '' and node_normalized = $2)
           or ($3 > 0 and auction_id = $3)
+          or ($4 <> '' and lower(name) = $4)
         )
     `,
-    [input.chainId, nodeNormalized, auctionId.toString()],
+    [input.chainId, nodeNormalized, auctionId.toString(), nameNormalized],
   );
 
   return result.rows.map(toNotificationSubscription);
@@ -2361,8 +2805,12 @@ export async function listRnsReservedNames(input: {
     sale_mode: RnsReservedSaleMode;
     reserve_price_wei: string | null;
     fixed_price_wei: string | null;
+    auction_duration_seconds: string;
     notes: string | null;
     display_order: number;
+    primary_auction_id: string | null;
+    activation_tx_hash: string | null;
+    activated_at: string | null;
     created_at: string;
     updated_at: string;
   }>(
@@ -2377,8 +2825,12 @@ export async function listRnsReservedNames(input: {
         sale_mode,
         reserve_price_wei::text,
         fixed_price_wei::text,
+        auction_duration_seconds::text,
         notes,
         display_order,
+        primary_auction_id::text,
+        activation_tx_hash,
+        activated_at,
         created_at,
         updated_at
       from stage0_rns.reserved_names
@@ -2392,6 +2844,195 @@ export async function listRnsReservedNames(input: {
   return result.rows.map(toReservedNameRecord);
 }
 
+export async function getRnsReservedNameById(input: { chainId: number; id: number }) {
+  const result = await pool.query<{
+    id: string;
+    chain_id: number;
+    label: string;
+    fqdn: string;
+    category: string;
+    enabled: boolean;
+    sale_mode: RnsReservedSaleMode;
+    reserve_price_wei: string | null;
+    fixed_price_wei: string | null;
+    auction_duration_seconds: string;
+    notes: string | null;
+    display_order: number;
+    primary_auction_id: string | null;
+    activation_tx_hash: string | null;
+    activated_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `
+      select
+        id::text,
+        chain_id,
+        label,
+        fqdn,
+        category,
+        enabled,
+        sale_mode,
+        reserve_price_wei::text,
+        fixed_price_wei::text,
+        auction_duration_seconds::text,
+        notes,
+        display_order,
+        primary_auction_id::text,
+        activation_tx_hash,
+        activated_at,
+        created_at,
+        updated_at
+      from stage0_rns.reserved_names
+      where chain_id = $1 and id = $2
+      limit 1
+    `,
+    [input.chainId, input.id],
+  );
+
+  return result.rows[0] ? toReservedNameRecord(result.rows[0]) : null;
+}
+
+export async function getRnsReservedNameByLabel(input: { chainId: number; label: string }) {
+  const result = await pool.query<{
+    id: string;
+    chain_id: number;
+    label: string;
+    fqdn: string;
+    category: string;
+    enabled: boolean;
+    sale_mode: RnsReservedSaleMode;
+    reserve_price_wei: string | null;
+    fixed_price_wei: string | null;
+    auction_duration_seconds: string;
+    notes: string | null;
+    display_order: number;
+    primary_auction_id: string | null;
+    activation_tx_hash: string | null;
+    activated_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `
+      select
+        id::text,
+        chain_id,
+        label,
+        fqdn,
+        category,
+        enabled,
+        sale_mode,
+        reserve_price_wei::text,
+        fixed_price_wei::text,
+        auction_duration_seconds::text,
+        notes,
+        display_order,
+        primary_auction_id::text,
+        activation_tx_hash,
+        activated_at,
+        created_at,
+        updated_at
+      from stage0_rns.reserved_names
+      where chain_id = $1
+        and lower(label) = lower($2)
+      limit 1
+    `,
+    [input.chainId, input.label],
+  );
+
+  return result.rows[0] ? toReservedNameRecord(result.rows[0]) : null;
+}
+
+export async function markRnsReservedNameActivated(input: {
+  chainId: number;
+  id: number;
+  txHash: `0x${string}`;
+  primaryAuctionId?: bigint | null;
+}) {
+  const result = await pool.query<{
+    id: string;
+    chain_id: number;
+    label: string;
+    fqdn: string;
+    category: string;
+    enabled: boolean;
+    sale_mode: RnsReservedSaleMode;
+    reserve_price_wei: string | null;
+    fixed_price_wei: string | null;
+    auction_duration_seconds: string;
+    notes: string | null;
+    display_order: number;
+    primary_auction_id: string | null;
+    activation_tx_hash: string | null;
+    activated_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `
+      update stage0_rns.reserved_names
+      set
+        primary_auction_id = coalesce($3, primary_auction_id),
+        activation_tx_hash = lower($4),
+        activated_at = now(),
+        updated_at = now()
+      where chain_id = $1 and id = $2
+      returning
+        id::text,
+        chain_id,
+        label,
+        fqdn,
+        category,
+        enabled,
+        sale_mode,
+        reserve_price_wei::text,
+        fixed_price_wei::text,
+        auction_duration_seconds::text,
+        notes,
+        display_order,
+        primary_auction_id::text,
+        activation_tx_hash,
+        activated_at,
+        created_at,
+        updated_at
+    `,
+    [
+      input.chainId,
+      input.id,
+      input.primaryAuctionId?.toString() ?? null,
+      input.txHash,
+    ],
+  );
+
+  return result.rows[0] ? toReservedNameRecord(result.rows[0]) : null;
+}
+
+export async function markRnsReservedNameActivatedByLabel(input: {
+  chainId: number;
+  label: string;
+  primaryAuctionId: bigint;
+  txHash?: `0x${string}` | null;
+}) {
+  await pool.query(
+    `
+      update stage0_rns.reserved_names
+      set
+        primary_auction_id = $3,
+        activation_tx_hash = coalesce(lower($4), activation_tx_hash),
+        activated_at = coalesce(activated_at, now()),
+        updated_at = now()
+      where chain_id = $1
+        and lower(label) = lower($2)
+        and sale_mode = 'auction'
+    `,
+    [
+      input.chainId,
+      input.label,
+      input.primaryAuctionId.toString(),
+      input.txHash ?? null,
+    ],
+  );
+}
+
 export async function upsertRnsReservedName(input: {
   chainId: number;
   label: string;
@@ -2400,6 +3041,7 @@ export async function upsertRnsReservedName(input: {
   saleMode?: RnsReservedSaleMode;
   reservePrice?: bigint | null;
   fixedPrice?: bigint | null;
+  auctionDurationSeconds?: bigint | null;
   notes?: string | null;
   displayOrder?: number | null;
 }) {
@@ -2414,8 +3056,12 @@ export async function upsertRnsReservedName(input: {
     sale_mode: RnsReservedSaleMode;
     reserve_price_wei: string | null;
     fixed_price_wei: string | null;
+    auction_duration_seconds: string;
     notes: string | null;
     display_order: number;
+    primary_auction_id: string | null;
+    activation_tx_hash: string | null;
+    activated_at: string | null;
     created_at: string;
     updated_at: string;
   }>(
@@ -2429,10 +3075,11 @@ export async function upsertRnsReservedName(input: {
         sale_mode,
         reserve_price_wei,
         fixed_price_wei,
+        auction_duration_seconds,
         notes,
         display_order
       )
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::bigint, 259200), $10, $11)
       on conflict (chain_id, (lower(label)))
       do update set
         fqdn = excluded.fqdn,
@@ -2441,8 +3088,24 @@ export async function upsertRnsReservedName(input: {
         sale_mode = excluded.sale_mode,
         reserve_price_wei = excluded.reserve_price_wei,
         fixed_price_wei = excluded.fixed_price_wei,
+        auction_duration_seconds = coalesce($9::bigint, stage0_rns.reserved_names.auction_duration_seconds),
         notes = excluded.notes,
         display_order = excluded.display_order,
+        primary_auction_id = case
+          when stage0_rns.reserved_names.sale_mode = excluded.sale_mode
+            then stage0_rns.reserved_names.primary_auction_id
+          else null
+        end,
+        activation_tx_hash = case
+          when stage0_rns.reserved_names.sale_mode = excluded.sale_mode
+            then stage0_rns.reserved_names.activation_tx_hash
+          else null
+        end,
+        activated_at = case
+          when stage0_rns.reserved_names.sale_mode = excluded.sale_mode
+            then stage0_rns.reserved_names.activated_at
+          else null
+        end,
         updated_at = now()
       returning
         id::text,
@@ -2454,8 +3117,12 @@ export async function upsertRnsReservedName(input: {
         sale_mode,
         reserve_price_wei::text,
         fixed_price_wei::text,
+        auction_duration_seconds::text,
         notes,
         display_order,
+        primary_auction_id::text,
+        activation_tx_hash,
+        activated_at,
         created_at,
         updated_at
     `,
@@ -2468,6 +3135,7 @@ export async function upsertRnsReservedName(input: {
       input.saleMode ?? "auction",
       input.reservePrice?.toString() ?? null,
       input.fixedPrice?.toString() ?? null,
+      input.auctionDurationSeconds?.toString() ?? null,
       input.notes?.trim() || null,
       input.displayOrder ?? 0,
     ],
@@ -2489,6 +3157,54 @@ export async function hasRnsNotificationDispatch(dispatchKey: string) {
   );
 
   return Boolean(result.rows[0]?.exists);
+}
+
+export async function claimRnsNotificationDispatch(input: {
+  channel: "email" | "admin_slack";
+  dispatchKey: string;
+  subscriptionId?: number | null;
+  eventSource: string;
+  eventType: string;
+  txHash?: `0x${string}` | null;
+  logIndex?: number | null;
+  detail?: unknown;
+}) {
+  const result = await pool.query<{ id: string }>(
+    `
+      insert into stage0_rns.notification_dispatches (
+        channel,
+        dispatch_key,
+        subscription_id,
+        event_source,
+        event_type,
+        tx_hash,
+        log_index,
+        detail
+      )
+      values ($1, $2, $3, $4, $5, lower($6), $7, $8::jsonb)
+      on conflict (dispatch_key) do nothing
+      returning id::text
+    `,
+    [
+      input.channel,
+      input.dispatchKey,
+      input.subscriptionId ?? null,
+      input.eventSource,
+      input.eventType,
+      input.txHash ?? null,
+      input.logIndex ?? null,
+      JSON.stringify(input.detail ?? {}),
+    ],
+  );
+
+  return result.rowCount === 1;
+}
+
+export async function releaseRnsNotificationDispatch(dispatchKey: string) {
+  await pool.query(
+    `delete from stage0_rns.notification_dispatches where dispatch_key = $1`,
+    [dispatchKey],
+  );
 }
 
 export async function recordRnsNotificationDispatch(input: {

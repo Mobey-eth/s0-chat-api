@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { formatEther, getAddress, keccak256, stringToBytes, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { config } from "../config.js";
+import { getRnsReservedNameByLabel } from "./store.js";
 import { normalizeRnsLabel } from "./service.js";
 
 const YEAR_SECONDS = 365n * 24n * 60n * 60n;
@@ -11,6 +12,7 @@ const MICROS_PER_USD = 1_000_000n;
 const quoteActionIds = {
   register: 0,
   renew: 1,
+  fixed_premium_register: 2,
 } as const;
 
 export type RnsQuoteAction = keyof typeof quoteActionIds;
@@ -35,6 +37,10 @@ function yearsForDuration(durationSeconds: bigint) {
 
 function usdLabel(cents: bigint | number) {
   return (Number(cents) / 100).toFixed(2);
+}
+
+function usdCentsForWei(priceWei: bigint, ethUsdMicros: bigint) {
+  return (priceWei * ethUsdMicros) / (WEI_PER_ETH * 10_000n);
 }
 
 function priceMultiplierBpsForYears(years: bigint) {
@@ -193,15 +199,42 @@ export async function buildRnsPriceQuote(input: {
     throw new Error("1-character and 2-character names are reserved");
   }
 
+  if (label.length < 3 && input.action === "fixed_premium_register") {
+    throw new Error("1-character and 2-character names must be auctioned");
+  }
+
   const account = privateKeyToAccount(config.rnsPriceSignerPrivateKey as Hex);
   const beneficiary = getAddress(input.beneficiary);
   const duration = input.durationSeconds;
   const years = yearsForDuration(duration);
+  const ethUsd = await getEthUsdPrice();
+  const reserved =
+    input.action === "fixed_premium_register"
+      ? await getRnsReservedNameByLabel({ chainId: config.riseTestnetChainId, label })
+      : null;
+
+  if (input.action === "fixed_premium_register") {
+    if (
+      !reserved?.enabled ||
+      !reserved.activatedAt ||
+      reserved.saleMode !== "buy_now" ||
+      !reserved.fixedPrice ||
+      reserved.fixedPrice <= 0n
+    ) {
+      throw new Error("This reserved name is not enabled for fixed-price purchase");
+    }
+  }
+
   const usdCentsPerYear = usdCentsPerYearForLabel(label);
   const display = pricingDisplay({ usdCentsPerYear, years });
-  const ethUsd = await getEthUsdPrice();
-  const priceUsdMicros = display.totalUsdCents * 10_000n;
-  const priceWei = (priceUsdMicros * WEI_PER_ETH) / ethUsd.priceMicros;
+  const priceWei =
+    input.action === "fixed_premium_register" && reserved?.fixedPrice
+      ? reserved.fixedPrice
+      : ((display.totalUsdCents * 10_000n) * WEI_PER_ETH) / ethUsd.priceMicros;
+  const totalUsdCents =
+    input.action === "fixed_premium_register"
+      ? usdCentsForWei(priceWei, ethUsd.priceMicros)
+      : display.totalUsdCents;
   const deadline = BigInt(Math.floor(Date.now() / 1000) + config.rnsPriceQuoteTtlSeconds);
   const nonce = `0x${randomBytes(32).toString("hex")}` as Hex;
   const labelHash = keccak256(stringToBytes(label));
@@ -258,15 +291,15 @@ export async function buildRnsPriceQuote(input: {
     display: {
       years: years.toString(),
       usdCentsPerYear,
-      subtotalUsdCents: display.subtotalUsdCents.toString(),
-      subtotalUsd: display.subtotalUsd,
+      subtotalUsdCents: totalUsdCents.toString(),
+      subtotalUsd: usdLabel(totalUsdCents),
       priceMultiplierBps: display.priceMultiplierBps,
-      discountBps: display.discountBps,
-      discountPercent: display.discountPercent,
-      discountUsdCents: display.discountUsdCents.toString(),
-      discountUsd: display.discountUsd,
-      totalUsdCents: display.totalUsdCents.toString(),
-      totalUsd: display.totalUsd,
+      discountBps: input.action === "fixed_premium_register" ? 0 : display.discountBps,
+      discountPercent: input.action === "fixed_premium_register" ? "0" : display.discountPercent,
+      discountUsdCents: input.action === "fixed_premium_register" ? "0" : display.discountUsdCents.toString(),
+      discountUsd: input.action === "fixed_premium_register" ? "0.00" : display.discountUsd,
+      totalUsdCents: totalUsdCents.toString(),
+      totalUsd: usdLabel(totalUsdCents),
       ethUsd: ethUsd.priceUsd,
       priceEth: formatEther(priceWei),
       priceWei: priceWei.toString(),
