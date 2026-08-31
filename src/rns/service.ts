@@ -61,7 +61,7 @@ import {
 } from "./store.js";
 
 const client = createPublicClient({
-  transport: http(config.riseTestnetRpcUrl),
+  transport: http(config.riseRpcUrl),
 });
 
 const registrarDecodeAbi = parseAbi([
@@ -436,7 +436,7 @@ async function runRnsMarketplaceSnapshot(reason: string) {
       const status = snapshotAuctionStatus(auction);
 
       await upsertRnsPrimaryAuctionSnapshot(db, {
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         auctionId: BigInt(index),
         name,
         duration: auction.duration,
@@ -460,7 +460,7 @@ async function runRnsMarketplaceSnapshot(reason: string) {
       const name = normalizeLabel(listing.name);
       if (!name) continue;
       await upsertRnsMarketplaceListingSnapshot(db, {
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         listingId: BigInt(index),
         node: toLowerHex(listing.node) as `0x${string}`,
         name,
@@ -480,7 +480,7 @@ async function runRnsMarketplaceSnapshot(reason: string) {
         : (toLowerHex(auction.highestBidder) as `0x${string}`);
       const status = snapshotAuctionStatus(auction);
       await upsertRnsMarketplaceAuctionSnapshot(db, {
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         auctionId: BigInt(index),
         node: toLowerHex(auction.node) as `0x${string}`,
         name,
@@ -510,7 +510,7 @@ async function runRnsMarketplaceSnapshot(reason: string) {
   await Promise.all(
     reservedLinks.map((link) =>
       markRnsReservedNameActivatedByLabel({
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         label: link.label,
         primaryAuctionId: link.auctionId,
       }),
@@ -520,7 +520,7 @@ async function runRnsMarketplaceSnapshot(reason: string) {
   marketplaceSnapshotAt = Date.now();
   logger.info("RNS marketplace snapshot refreshed", {
     reason,
-    chainId: config.riseTestnetChainId,
+    chainId: config.riseChainId,
     blockNumber: head.toString(),
     primaryAuctions: primaryCount,
     listings: listingCount,
@@ -695,7 +695,7 @@ async function syncRegistrarRange(fromBlock: bigint, toBlock: bigint, emitNotifi
           (log as (typeof registered)[number]).args.registrant as `0x${string}`,
         ) ?? (ZERO_ADDRESS as `0x${string}`);
         await upsertRnsRegistration(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           node: node as `0x${string}`,
           label: decoded.label,
           fqdn: decoded.fqdn,
@@ -709,7 +709,7 @@ async function syncRegistrarRange(fromBlock: bigint, toBlock: bigint, emitNotifi
         });
         if (decoded.txTo !== config.rnsContracts.auctionHouse.toLowerCase()) {
           pendingAdminNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             name: decoded.label,
             fqdn: decoded.fqdn,
             registrant: registrant as `0x${string}`,
@@ -723,7 +723,7 @@ async function syncRegistrarRange(fromBlock: bigint, toBlock: bigint, emitNotifi
 
       if (entry.kind === "renew") {
         await applyRnsRenewal(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           node: node as `0x${string}`,
           label: decoded.label,
           fqdn: decoded.fqdn,
@@ -736,7 +736,7 @@ async function syncRegistrarRange(fromBlock: bigint, toBlock: bigint, emitNotifi
       }
 
       await applyRnsRelease(db, {
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         node: node as `0x${string}`,
         label: decoded.label,
         fqdn: decoded.fqdn,
@@ -817,7 +817,7 @@ async function syncRegistryRange(fromBlock: bigint, toBlock: bigint) {
           (log as (typeof transfers)[number]).args.owner as `0x${string}`,
         ) ?? (ZERO_ADDRESS as `0x${string}`);
         await applyRnsOwnerTransfer(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           node: node as `0x${string}`,
           owner: owner as `0x${string}`,
           blockNumber: log.blockNumber,
@@ -827,7 +827,7 @@ async function syncRegistryRange(fromBlock: bigint, toBlock: bigint) {
 
       const resolver = toLowerHex((log as (typeof resolvers)[number]).args.resolver as `0x${string}`);
       await applyRnsResolverUpdate(db, {
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         node: node as `0x${string}`,
         resolver: isZeroAddress(resolver) ? null : (resolver as `0x${string}`),
         blockNumber: log.blockNumber,
@@ -900,7 +900,7 @@ async function syncResolverRange(fromBlock: bigint, toBlock: bigint) {
       if (!node) continue;
       const addr = toLowerHex(log.args.addr as `0x${string}`);
       await applyRnsResolvedAddressUpdate(db, {
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         node: node as `0x${string}`,
         resolvedAddress: isZeroAddress(addr) ? null : (addr as `0x${string}`),
         blockNumber: log.blockNumber,
@@ -1003,7 +1003,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
         if (!name) continue;
         const auctionId = args.auctionId as bigint;
         await upsertRnsPrimaryAuction(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
           name,
           duration: (args.duration as bigint | undefined) ?? 0n,
@@ -1015,7 +1015,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
           blockTime,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           entityType: "auction",
           eventType: "primary_auction.created",
@@ -1033,7 +1033,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
           },
         });
         pendingAdminNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           eventType: "primary_auction.created",
           entityType: "auction",
@@ -1045,7 +1045,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
           logIndex: log.logIndex,
         });
         pendingSubscriberNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           eventType: "primary_auction.created",
           entityType: "auction",
@@ -1067,11 +1067,11 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
         const bidder = toLowerHex(args.bidder as `0x${string}`) as `0x${string}`;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         const previousRecord = await getRnsPrimaryAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         await applyRnsPrimaryAuctionBid(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
           bidder,
           amount,
@@ -1080,7 +1080,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
           blockNumber: log.blockNumber,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           entityType: "auction",
           eventType: "primary_auction.bid",
@@ -1097,11 +1097,11 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
           },
         });
         const record = await getRnsPrimaryAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         pendingAdminNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           eventType: "primary_auction.bid",
           entityType: "auction",
@@ -1115,7 +1115,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
         });
         if (record) {
           pendingSubscriberNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "primary_auction",
             eventType: "primary_auction.bid",
             entityType: "auction",
@@ -1140,7 +1140,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
         const bidder = toLowerHex(args.bidder as `0x${string}`) as `0x${string}`;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           entityType: "refund",
           eventType: "primary_auction.refund_available",
@@ -1153,11 +1153,11 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
           blockTime,
         });
         const record = await getRnsPrimaryAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         pendingAdminNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           eventType: "primary_auction.refund_available",
           entityType: "refund",
@@ -1174,12 +1174,12 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
       if (entry.kind === "cancelled") {
         const auctionId = (log as (typeof cancelled)[number]).args.auctionId as bigint;
         await applyRnsPrimaryAuctionCancelled(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
           blockNumber: log.blockNumber,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           entityType: "auction",
           eventType: "primary_auction.cancelled",
@@ -1190,11 +1190,11 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
           blockTime,
         });
         const record = await getRnsPrimaryAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         pendingAdminNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           eventType: "primary_auction.cancelled",
           entityType: "auction",
@@ -1206,7 +1206,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
         });
         if (record) {
           pendingSubscriberNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "primary_auction",
             eventType: "primary_auction.cancelled",
             entityType: "auction",
@@ -1229,14 +1229,14 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
         const winner = winnerAddress === ZERO_ADDRESS ? null : winnerAddress;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         await applyRnsPrimaryAuctionSettled(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
           winner,
           amount,
           blockNumber: log.blockNumber,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           entityType: "auction",
           eventType: "primary_auction.settled",
@@ -1249,11 +1249,11 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
           blockTime,
         });
         const record = await getRnsPrimaryAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         pendingAdminNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "primary_auction",
           eventType: "primary_auction.settled",
           entityType: "auction",
@@ -1268,7 +1268,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
         });
         if (record) {
           pendingSubscriberNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "primary_auction",
             eventType: "primary_auction.settled",
             entityType: "auction",
@@ -1291,7 +1291,7 @@ async function syncPrimaryAuctionRange(fromBlock: bigint, toBlock: bigint, emitN
       const bidder = toLowerHex(args.bidder as `0x${string}`) as `0x${string}`;
       const amount = (args.amount as bigint | undefined) ?? 0n;
       await recordRnsMarketplaceEvent(db, {
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         source: "primary_auction",
         entityType: "withdrawal",
         eventType: "primary_auction.withdrawal",
@@ -1479,7 +1479,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         const seller = toLowerHex(args.seller as `0x${string}`) as `0x${string}`;
         const price = (args.price as bigint | undefined) ?? 0n;
         await upsertRnsMarketplaceListing(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           listingId,
           node: args.node as `0x${string}`,
           name,
@@ -1490,7 +1490,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           blockTime,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "listing",
           eventType: "marketplace.listed",
@@ -1505,7 +1505,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           payload: { node: String(args.node).toLowerCase() },
         });
         pendingAdminNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           eventType: "marketplace.listed",
           entityType: "listing",
@@ -1520,7 +1520,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           logIndex: log.logIndex,
         });
         pendingSubscriberNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           eventType: "marketplace.listed",
           entityType: "listing",
           entityId: listingId,
@@ -1540,12 +1540,12 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
       if (entry.kind === "listing_cancelled") {
         const listingId = (log as (typeof listingCancelled)[number]).args.listingId as bigint;
         await applyRnsMarketplaceListingCancelled(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           listingId,
           blockNumber: log.blockNumber,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "listing",
           eventType: "marketplace.listing_cancelled",
@@ -1556,12 +1556,12 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           blockTime,
         });
         const record = await getRnsMarketplaceListingById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           listingId,
         });
         if (record) {
           pendingAdminNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "marketplace",
             eventType: "marketplace.listing_cancelled",
             entityType: "listing",
@@ -1583,18 +1583,18 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         const buyer = toLowerHex(args.buyer as `0x${string}`) as `0x${string}`;
         const price = (args.price as bigint | undefined) ?? 0n;
         await applyRnsMarketplaceListingPurchased(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           listingId,
           buyer,
           price,
           blockNumber: log.blockNumber,
         });
         const record = await getRnsMarketplaceListingById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           listingId,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "listing",
           eventType: "marketplace.listing_purchased",
@@ -1609,7 +1609,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         });
         if (record) {
           pendingAdminNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "marketplace",
             eventType: "marketplace.listing_purchased",
             entityType: "listing",
@@ -1624,7 +1624,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
             logIndex: log.logIndex,
           });
           pendingSubscriberNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             eventType: "marketplace.listing_purchased",
             entityType: "listing",
             entityId: listingId,
@@ -1650,7 +1650,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         const seller = toLowerHex(args.seller as `0x${string}`) as `0x${string}`;
         const reservePrice = (args.reservePrice as bigint | undefined) ?? 0n;
         await upsertRnsMarketplaceAuction(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
           node: args.node as `0x${string}`,
           name,
@@ -1663,7 +1663,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           blockTime,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "auction",
           eventType: "marketplace.auction_created",
@@ -1682,7 +1682,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           },
         });
         pendingAdminNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           eventType: "marketplace.auction_created",
           entityType: "auction",
@@ -1697,7 +1697,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           logIndex: log.logIndex,
         });
         pendingSubscriberNotifications.push({
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           eventType: "marketplace.auction_created",
           entityType: "auction",
           entityId: auctionId,
@@ -1720,11 +1720,11 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         const bidder = toLowerHex(args.bidder as `0x${string}`) as `0x${string}`;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         const previousRecord = await getRnsMarketplaceAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         await applyRnsMarketplaceAuctionBid(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
           bidder,
           amount,
@@ -1733,11 +1733,11 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           blockNumber: log.blockNumber,
         });
         const record = await getRnsMarketplaceAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "auction",
           eventType: "marketplace.bid",
@@ -1756,7 +1756,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         });
         if (record) {
           pendingAdminNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "marketplace",
             eventType: "marketplace.bid",
             entityType: "auction",
@@ -1771,7 +1771,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
             logIndex: log.logIndex,
           });
           pendingSubscriberNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             eventType: "marketplace.bid",
             entityType: "auction",
             entityId: auctionId,
@@ -1796,7 +1796,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         const bidder = toLowerHex(args.bidder as `0x${string}`) as `0x${string}`;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "refund",
           eventType: "marketplace.refund_available",
@@ -1809,12 +1809,12 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           blockTime,
         });
         const record = await getRnsMarketplaceAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         if (record) {
           pendingAdminNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "marketplace",
             eventType: "marketplace.refund_available",
             entityType: "refund",
@@ -1834,12 +1834,12 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
       if (entry.kind === "auction_cancelled") {
         const auctionId = (log as (typeof secondaryAuctionCancelled)[number]).args.auctionId as bigint;
         await applyRnsMarketplaceAuctionCancelled(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
           blockNumber: log.blockNumber,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "auction",
           eventType: "marketplace.auction_cancelled",
@@ -1850,12 +1850,12 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           blockTime,
         });
         const record = await getRnsMarketplaceAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         if (record) {
           pendingAdminNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "marketplace",
             eventType: "marketplace.auction_cancelled",
             entityType: "auction",
@@ -1878,14 +1878,14 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         const winner = winnerAddress === ZERO_ADDRESS ? null : winnerAddress;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         await applyRnsMarketplaceAuctionSettled(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
           winner,
           amount,
           blockNumber: log.blockNumber,
         });
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "auction",
           eventType: "marketplace.auction_settled",
@@ -1898,12 +1898,12 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
           blockTime,
         });
         const record = await getRnsMarketplaceAuctionById(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           auctionId,
         });
         if (record) {
           pendingAdminNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             source: "marketplace",
             eventType: "marketplace.auction_settled",
             entityType: "auction",
@@ -1919,7 +1919,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
             logIndex: log.logIndex,
           });
           pendingSubscriberNotifications.push({
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             eventType: "marketplace.auction_settled",
             entityType: "auction",
             entityId: auctionId,
@@ -1945,7 +1945,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         const amount = (args.amount as bigint | undefined) ?? 0n;
         const isAuction = Boolean(args.isAuction);
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: isAuction ? "auction_proceeds" : "listing_proceeds",
           eventType: "marketplace.proceeds_available",
@@ -1966,7 +1966,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
         const account = toLowerHex(args.account as `0x${string}`) as `0x${string}`;
         const amount = (args.amount as bigint | undefined) ?? 0n;
         await recordRnsMarketplaceEvent(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           source: "marketplace",
           entityType: "proceeds_withdrawal",
           eventType: "marketplace.proceeds_withdrawal",
@@ -1984,7 +1984,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
       const account = toLowerHex(args.account as `0x${string}`) as `0x${string}`;
       const amount = (args.amount as bigint | undefined) ?? 0n;
       await recordRnsMarketplaceEvent(db, {
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         source: "marketplace",
         entityType: "withdrawal",
         eventType: "marketplace.withdrawal",
@@ -2021,7 +2021,7 @@ async function syncMarketplaceRange(fromBlock: bigint, toBlock: bigint, emitNoti
 }
 
 async function syncJob(jobName: JobName) {
-  const states = await getRnsSyncStates(config.riseTestnetChainId);
+  const states = await getRnsSyncStates(config.riseChainId);
   const expectedContractAddress = getJobContractAddress(jobName);
   const currentState = states.find(
     (state) =>
@@ -2051,7 +2051,7 @@ async function syncJob(jobName: JobName) {
   if (!currentState && previousDeploymentState) {
     logger.warn("RNS index contract changed; initializing the active deployment", {
       jobName,
-      chainId: config.riseTestnetChainId,
+      chainId: config.riseChainId,
       previousContractAddress: previousDeploymentState.contractAddress,
       contractAddress: expectedContractAddress,
       startBlock: startBlock.toString(),
@@ -2068,7 +2068,7 @@ async function syncJob(jobName: JobName) {
     startBlock = recentStart > initialBlock ? recentStart : initialBlock;
     logger.warn("RNS marketplace event index was stale; resuming from recent chain tail", {
       jobName,
-      chainId: config.riseTestnetChainId,
+      chainId: config.riseChainId,
       previousBlock: currentState?.lastProcessedBlock.toString() ?? null,
       resumeBlock: startBlock.toString(),
       headBlock: head.toString(),
@@ -2094,7 +2094,7 @@ async function syncJob(jobName: JobName) {
 
     await upsertRnsSyncState({
       jobName,
-      chainId: config.riseTestnetChainId,
+      chainId: config.riseChainId,
       contractAddress: getJobContractAddress(jobName),
       lastProcessedBlock: toBlock,
       lastProcessedBlockHash: await getBlockHash(toBlock),
@@ -2124,7 +2124,7 @@ async function runSync(reason: string, jobNames: readonly JobName[] = DEFAULT_JO
   }
   logger.info("RNS sync complete", {
     reason,
-    chainId: config.riseTestnetChainId,
+    chainId: config.riseChainId,
     jobs: jobNames,
     durationMs: Date.now() - startedAt,
   });
@@ -2150,7 +2150,7 @@ async function runReconciliation(reason: string) {
   try {
     await assertRnsContractConfiguration();
     const names = await getRnsNamesForReconciliation(
-      config.riseTestnetChainId,
+      config.riseChainId,
       ACTIVE_RNS_REGISTRAR_START_BLOCK,
     );
     if (names.length === 0) return;
@@ -2159,7 +2159,7 @@ async function runReconciliation(reason: string) {
     try {
       head = await client.getBlockNumber();
     } catch (error) {
-      const states = await getRnsSyncStates(config.riseTestnetChainId);
+      const states = await getRnsSyncStates(config.riseChainId);
       head = states.reduce(
         (max, state) => (state.lastProcessedBlock > max ? state.lastProcessedBlock : max),
         0n,
@@ -2271,7 +2271,7 @@ async function runReconciliation(reason: string) {
         if (wouldEraseActiveName) {
           logger.warn("RNS reconciliation ignored zero owner/expiry read for active name", {
             reason,
-            chainId: config.riseTestnetChainId,
+            chainId: config.riseChainId,
             node: name.node,
             label: name.label,
             previousOwner: name.owner,
@@ -2283,7 +2283,7 @@ async function runReconciliation(reason: string) {
         }
 
         await applyRnsReconciliation(db, {
-          chainId: config.riseTestnetChainId,
+          chainId: config.riseChainId,
           node: name.node,
           label,
           fqdn,
@@ -2301,7 +2301,7 @@ async function runReconciliation(reason: string) {
       await db.query("commit");
       logger.info("RNS reconciliation complete", {
         reason,
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         names: names.length,
       });
     } catch (error) {
@@ -2375,7 +2375,7 @@ export async function ensureRnsIndexFresh(
   reason = "request",
   jobNames: readonly JobName[] = DEFAULT_JOB_ORDER,
 ) {
-  const states = await getRnsSyncStates(config.riseTestnetChainId);
+  const states = await getRnsSyncStates(config.riseChainId);
   const head = await client.getBlockNumber();
   const staleCutoff = Date.now() - config.rnsSyncIntervalSeconds * 2 * 1000;
   const targetStates = states.filter(
@@ -2398,7 +2398,7 @@ export async function ensureRnsIndexFresh(
 async function runRnsAuctionLifecycleNotifications(reason: string) {
   await ensureRnsMarketplaceSnapshot(`auction-lifecycle-${reason}`);
   const endedAuctions = await getRnsEndedAuctionsForLifecycle({
-    chainId: config.riseTestnetChainId,
+    chainId: config.riseChainId,
     nowUnix: BigInt(Math.floor(Date.now() / 1000)),
   });
 
@@ -2514,7 +2514,7 @@ export function startRnsJobs() {
 }
 
 export async function listOwnedRnsNames(owner: string, chainId: number) {
-  if (chainId !== config.riseTestnetChainId) {
+  if (chainId !== config.riseChainId) {
     return [];
   }
 
@@ -2633,7 +2633,7 @@ async function getRnsReadHead(reason: string) {
   try {
     return await client.getBlockNumber();
   } catch (error) {
-    const states = await getRnsSyncStates(config.riseTestnetChainId);
+    const states = await getRnsSyncStates(config.riseChainId);
     const fallbackBlock = states.reduce(
       (max, state) => (state.lastProcessedBlock > max ? state.lastProcessedBlock : max),
       ACTIVE_RNS_REGISTRAR_START_BLOCK,
@@ -2653,7 +2653,7 @@ export async function reconcileRnsKnownLabel(input: {
   reason?: string;
 }) {
   await assertRnsContractConfiguration();
-  if (input.chainId !== config.riseTestnetChainId) return null;
+  if (input.chainId !== config.riseChainId) return null;
 
   const label = normalizeRnsLabel(input.label);
   if (!label) return null;
@@ -2797,7 +2797,7 @@ export async function reconcileRnsKnownLabel(input: {
 }
 
 export async function resolveRnsName(input: { name: string; chainId: number }) {
-  if (input.chainId !== config.riseTestnetChainId) return null;
+  if (input.chainId !== config.riseChainId) return null;
 
   const label = normalizeRnsLabel(input.name);
   if (!label) return null;
@@ -2825,7 +2825,7 @@ export async function resolveRnsName(input: { name: string; chainId: number }) {
 }
 
 export async function resolveRnsPrimaryName(input: { address: string; chainId: number }) {
-  if (input.chainId !== config.riseTestnetChainId) return null;
+  if (input.chainId !== config.riseChainId) return null;
 
   refreshRnsIndexInBackground("public-address-read", NAME_JOB_ORDER);
   return getRnsPrimaryNameForAddress({
@@ -2838,12 +2838,12 @@ export async function resolveRnsPrimaryName(input: { address: string; chainId: n
 
 export async function getRnsIndexHealth() {
   const [states, nameCount] = await Promise.all([
-    getRnsSyncStates(config.riseTestnetChainId),
-    getRnsNameCount(config.riseTestnetChainId, ACTIVE_RNS_REGISTRAR_START_BLOCK),
+    getRnsSyncStates(config.riseChainId),
+    getRnsNameCount(config.riseChainId, ACTIVE_RNS_REGISTRAR_START_BLOCK),
   ]);
 
   return {
-    chainId: config.riseTestnetChainId,
+    chainId: config.riseChainId,
     namesIndexed: nameCount,
     jobs: states
       .filter(
@@ -2964,7 +2964,7 @@ function serializeMarketplaceEventRecord(event: RnsMarketplaceEventRecord) {
 }
 
 export async function listRnsPrimaryAuctions(chainId: number, limit = 50) {
-  if (chainId !== config.riseTestnetChainId) return [];
+  if (chainId !== config.riseChainId) return [];
   await ensureRnsMarketplaceSnapshot("primary-auctions-read").catch((error) => {
     logger.warn("RNS primary auctions read is using the last snapshot", {
       error: error instanceof Error ? error.message : String(error),
@@ -2976,7 +2976,7 @@ export async function listRnsPrimaryAuctions(chainId: number, limit = 50) {
 }
 
 export async function listRnsMarketplaceListings(chainId: number, limit = 50) {
-  if (chainId !== config.riseTestnetChainId) return [];
+  if (chainId !== config.riseChainId) return [];
   await ensureRnsMarketplaceSnapshot("marketplace-listings-read").catch((error) => {
     logger.warn("RNS marketplace listings read is using the last snapshot", {
       error: error instanceof Error ? error.message : String(error),
@@ -2988,7 +2988,7 @@ export async function listRnsMarketplaceListings(chainId: number, limit = 50) {
 }
 
 export async function listRnsMarketplaceAuctions(chainId: number, limit = 50) {
-  if (chainId !== config.riseTestnetChainId) return [];
+  if (chainId !== config.riseChainId) return [];
   await ensureRnsMarketplaceSnapshot("marketplace-auctions-read").catch((error) => {
     logger.warn("RNS marketplace auctions read is using the last snapshot", {
       error: error instanceof Error ? error.message : String(error),
@@ -3000,7 +3000,7 @@ export async function listRnsMarketplaceAuctions(chainId: number, limit = 50) {
 }
 
 export async function listRnsMarketplaceActivity(chainId: number, limit = 50) {
-  if (chainId !== config.riseTestnetChainId) return [];
+  if (chainId !== config.riseChainId) return [];
   refreshRnsIndexInBackground("marketplace-activity-read", ["primary_auction", "marketplace"]);
   const events = await getRnsMarketplaceEvents({ chainId, limit });
   return events.map(serializeMarketplaceEventRecord);

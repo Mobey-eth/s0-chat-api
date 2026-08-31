@@ -2,14 +2,14 @@
 
 RISE is an Ethereum Layer 2 with EVM compatibility. Stage0 uses normal EVM wallet and contract flows on RISE, not SS58 or Substrate account flows.
 
-## RISE Testnet
+## RISE Mainnet
 
-- Network name: RISE Testnet
-- Chain ID: `11155931`
-- RPC URL: `https://testnet.riselabs.xyz`
-- Explorer: `https://explorer.testnet.riselabs.xyz`
+- Network name: RISE Mainnet
+- Chain ID: `4153` (`0x1039`)
+- RPC URL: `https://rpc.risechain.com`
+- Explorer: `https://explorer.risechain.com`
 - Currency symbol: ETH
-- Faucet: `https://faucet.testnet.riselabs.xyz`
+- Faucet: none; this is mainnet and transactions use real ETH
 
 ## Wallet behavior
 
@@ -19,8 +19,8 @@ RISE Wallet is chain-native and supports passkeys, sponsored gas budgets, and st
 
 ## Developer behavior
 
-RISE supports standard EVM tooling such as Hardhat, Foundry, Viem, Ethers, Wagmi, and Remix. Contract interactions should use chain ID `11155931` and the RISE Testnet RPC URL unless the app later adds more networks.
+RISE supports standard EVM tooling such as Hardhat, Foundry, Viem, Ethers, Wagmi, and Remix. Stage0 contract interactions must use chain ID `4153` and the RISE Mainnet RPC URL.
 
 ## Safety
 
-Senna should never ask for private keys or seed phrases. If a user needs funds, point them to the RISE Testnet faucet. If a user wants to verify a transaction or contract, point them to the RISE explorer.
+Senna should never ask for private keys or seed phrases. Do not direct mainnet users to a faucet or imply that mainnet ETH has no value. If a user wants to verify a transaction or contract, point them to `https://explorer.risechain.com`.

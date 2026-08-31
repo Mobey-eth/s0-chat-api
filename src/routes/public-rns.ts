@@ -63,13 +63,13 @@ function parseChainId(query: unknown) {
     };
   }
 
-  const chainId = parsed.data.chainId ?? config.riseTestnetChainId;
-  if (chainId !== config.riseTestnetChainId) {
+  const chainId = parsed.data.chainId ?? config.riseChainId;
+  if (chainId !== config.riseChainId) {
     return {
       ok: false as const,
       error: {
         error: "unsupported_chain",
-        detail: `Only chainId ${config.riseTestnetChainId} is indexed right now.`,
+        detail: `Only chainId ${config.riseChainId} is indexed right now.`,
       },
     };
   }

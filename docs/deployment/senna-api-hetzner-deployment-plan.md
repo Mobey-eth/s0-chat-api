@@ -300,9 +300,26 @@ STAGE0_UPLOAD_MAX_BYTES=2097152
 STAGE0_DOCS_BASE_URL=<current Stage0 docs URL used by the project>
 STAGE0_DOCS_SEED_URLS=<current Stage0 docs seed URLs used by the project>
 
-RISE_TESTNET_RPC_URL=<current Rise RPC URL used by the project>
-RISE_TESTNET_CHAIN_ID=<current Rise chain ID used by the project>
-RISE_TESTNET_EXPLORER_URL=<current Rise explorer URL used by the project>
+RISE_RPC_URL=https://rpc.risechain.com
+RISE_CHAIN_ID=4153
+RISE_EXPLORER_URL=https://explorer.risechain.com
+
+RNS_REGISTRY_ADDRESS=0x6DDca710993C91402d52061868bE76043a4C5888
+RNS_RESOLVER_ADDRESS=0x36D6383774631565AB0D8F3710748610631A675d
+RNS_REGISTRAR_ADDRESS=0xbCA437a93C2E7396a68Ce49BE224F65eE3CFd6Db
+RNS_AUCTION_HOUSE_ADDRESS=0x0E37994c19980A792B83A106cE03a9b8a9cD40Fc
+RNS_MARKETPLACE_ADDRESS=0x323A04F474f80225DE60C1Af13a672796aFA6622
+RNS_ADMIN_ADDRESS=0x78d2e9D2B81D94ED27310d61e5f9e1C4db35fba5
+RNS_REGISTRY_START_BLOCK=20079518
+RNS_RESOLVER_START_BLOCK=20079521
+RNS_REGISTRAR_START_BLOCK=20079523
+RNS_AUCTION_HOUSE_START_BLOCK=20079526
+RNS_MARKETPLACE_START_BLOCK=20079528
+RNS_PRICE_SIGNER_PRIVATE_KEY=...
+
+RESEND_API_KEY=...
+RESEND_FROM_EMAIL=hello@stage0.xyz
+RNS_ADMIN_ACTIVITY_SLACK_WEBHOOK_URL=...
 
 DEEPSEEK_API_KEY=...
 DEEPSEEK_BASE_URL=https://api.deepseek.com
@@ -314,6 +331,8 @@ Notes:
 
 - `STAGE0_UPLOAD_MAX_BYTES=2097152` enforces the 2MB per-project upload cap.
 - Keep `.env` out of git.
+- The RNS quote-signer key must derive to the registrar's on-chain `priceSigner`.
+- Rotate the quote-signer key and Slack webhook before the public mainnet release if either has appeared in terminal or CI output.
 - If the frontend also serves `www.stage0.xyz`, update the API CORS implementation/env later to allow both origins cleanly.
 
 ## Database Migrations
@@ -332,6 +351,17 @@ Expected database coverage:
 - NFT collection profile records
 - token profile records
 - uploaded image/profile metadata
+- chain-scoped RNS names, auctions, marketplace activity, reserved inventory, sync cursors, and notification dispatches
+
+After migration, run the read-only release gate:
+
+```bash
+docker compose run --rm senna-chat-api npm run rns:check-mainnet:prod
+```
+
+Do not start the new container if this reports a failed check. The mainnet
+reserved-name rows are initially disabled so migration cannot accidentally
+publish them.
 
 The database should store project-level profile images and project info only.
 
@@ -493,14 +523,11 @@ Typical app update:
 ```bash
 cd ~/senna-chat-api
 git pull
+docker compose build
 docker compose run --rm senna-chat-api npm run db:migrate:prod
-docker compose up -d --build
-```
-
-If docs changed:
-
-```bash
+docker compose run --rm senna-chat-api npm run rns:check-mainnet:prod
 docker compose run --rm senna-chat-api npm run docs:sync
+docker compose up -d
 ```
 
 Check after deploy:

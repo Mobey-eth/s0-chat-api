@@ -16,7 +16,7 @@ export interface ActionDraft {
   actionType: ActionType;
   targetRoute: string;
   requiredWallet: "evm" | null;
-  requiredChain: "rise_testnet" | null;
+  requiredChain: "rise_mainnet" | null;
   prefill: Record<string, string>;
   summary: string;
   warnings: string[];

@@ -187,6 +187,7 @@ function emailShell(input: {
   txHref?: string;
 }) {
   const bullets = input.bullets
+    .concat(`Network: ${config.riseNetworkName} (${config.riseChainId})`)
     .map((item) => {
       const [label, ...rest] = item.split(":");
       const value = rest.join(":").trim();
@@ -209,7 +210,7 @@ function emailShell(input: {
     <body style="margin:0;padding:32px 16px;background:#edf1ed;font-family:Arial,sans-serif;color:#f5f7f5;">
       <div style="max-width:580px;margin:0 auto;overflow:hidden;border-radius:24px;background:#0d1812;border:1px solid #203328;box-shadow:0 20px 50px rgba(13,24,18,.14);">
         <div style="padding:22px 28px;border-bottom:1px solid #203328;background:#101f16;">
-          <div style="font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:#b8f34a;font-weight:800;">StageO</div>
+          <div style="font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:#b8f34a;font-weight:800;">Stage0</div>
         </div>
         <div style="padding:30px 28px 26px;">
           <h1 style="margin:0 0 10px;font-size:28px;line-height:1.12;letter-spacing:-.02em;color:#ffffff;">${escapeHtml(input.title)}</h1>
@@ -218,7 +219,7 @@ function emailShell(input: {
           <div style="display:flex;align-items:center;gap:16px;">${cta}</div>
         </div>
         <div style="padding:16px 28px;background:#09110d;color:#7e9185;font-size:12px;line-height:1.5;">
-          ${txLink}<div style="margin-top:6px;">You received this because you opted into updates for this .rise name.</div>
+          ${txLink}<div style="margin-top:6px;">You received this because you opted into Stage0 updates for this .rise name on ${escapeHtml(config.riseNetworkName)}.</div>
         </div>
       </div>
     </body>
@@ -243,6 +244,7 @@ async function maybeSendSubscriptionEmail(
 ) {
   if (!config.resendApiKey) return;
   const claimed = await claimRnsNotificationDispatch({
+    chainId: subscription.chainId,
     channel: "email",
     dispatchKey,
     subscriptionId: subscription.id,
@@ -264,11 +266,11 @@ async function maybeSendSubscriptionEmail(
         bullets: input.bullets,
         ctaLabel: input.ctaLabel ?? "Open marketplace",
         ctaHref: input.ctaHref ?? `${config.stage0AppUrl}/domains/marketplace`,
-        txHref: input.txHash ? `${config.riseTestnetExplorerUrl}/tx/${input.txHash}` : undefined,
+        txHref: input.txHash ? `${config.riseExplorerUrl}/tx/${input.txHash}` : undefined,
       }),
     });
   } catch (error) {
-    await releaseRnsNotificationDispatch(dispatchKey);
+    await releaseRnsNotificationDispatch({ chainId: subscription.chainId, dispatchKey });
     throw error;
   }
 }
@@ -374,6 +376,7 @@ async function sendAuctionLifecycleSlack(activity: AuctionEndedLifecycleActivity
             { type: "mrkdwn", text: `*Name*\n${activity.fqdn}` },
             { type: "mrkdwn", text: `*Source*\n${activity.source === "primary_auction" ? "Reserved auction" : "Wallet marketplace"}` },
             { type: "mrkdwn", text: `*Bids*\n${activity.bidCount}` },
+            { type: "mrkdwn", text: `*Network*\n${config.riseNetworkName} (${activity.chainId})` },
             {
               type: "mrkdwn",
               text: hasWinner
@@ -514,6 +517,7 @@ export async function notifyAdminRnsRegistration(activity: AdminRegistrationActi
   const dispatchKey = `admin:registration:${activity.chainId}:${activity.txHash.toLowerCase()}:${activity.logIndex}`;
   const expiry = activity.expiry > 0n ? new Date(Number(activity.expiry) * 1000).toUTCString() : "Unknown";
   const claimed = await claimRnsNotificationDispatch({
+    chainId: activity.chainId,
     channel: "admin_slack",
     dispatchKey,
     eventSource: "registrar",
@@ -538,7 +542,7 @@ export async function notifyAdminRnsRegistration(activity: AdminRegistrationActi
             { type: "mrkdwn", text: `*Name*\n${fqdn}` },
             { type: "mrkdwn", text: `*Owner*\n${shortAddress(activity.registrant)}` },
             { type: "mrkdwn", text: `*Expires*\n${expiry}` },
-            { type: "mrkdwn", text: "*Network*\nRISE Testnet" },
+            { type: "mrkdwn", text: `*Network*\n${config.riseNetworkName} (${activity.chainId})` },
           ],
         },
         {
@@ -546,14 +550,14 @@ export async function notifyAdminRnsRegistration(activity: AdminRegistrationActi
           elements: [
             {
               type: "mrkdwn",
-              text: `<${config.riseTestnetExplorerUrl}/tx/${activity.txHash}|View registration transaction>`,
+              text: `<${config.riseExplorerUrl}/tx/${activity.txHash}|View registration transaction>`,
             },
           ],
         },
       ],
     });
   } catch (error) {
-    await releaseRnsNotificationDispatch(dispatchKey);
+    await releaseRnsNotificationDispatch({ chainId: activity.chainId, dispatchKey });
     throw error;
   }
 }
@@ -568,6 +572,7 @@ export async function notifyAdminRnsMarketplaceActivity(activity: AdminMarketpla
   const amount = await formatEthUsdAmount(activity.amount);
   const source = activity.source === "primary_auction" ? "Stage0 reserved-name auction" : "Wallet marketplace";
   const claimed = await claimRnsNotificationDispatch({
+    chainId: activity.chainId,
     channel: "admin_slack",
     dispatchKey,
     eventSource: activity.source,
@@ -592,6 +597,7 @@ export async function notifyAdminRnsMarketplaceActivity(activity: AdminMarketpla
   if (activity.winner) fields.push({ type: "mrkdwn", text: `*Winner*\n${shortAddress(activity.winner)}` });
   if (activity.status) fields.push({ type: "mrkdwn", text: `*Status*\n${activity.status}` });
   fields.push({ type: "mrkdwn", text: `*Source*\n${source}` });
+  fields.push({ type: "mrkdwn", text: `*Network*\n${config.riseNetworkName} (${activity.chainId})` });
 
   try {
     await postSlack({
@@ -607,14 +613,14 @@ export async function notifyAdminRnsMarketplaceActivity(activity: AdminMarketpla
           elements: [
             {
               type: "mrkdwn",
-              text: `<${config.riseTestnetExplorerUrl}/tx/${activity.txHash}|View marketplace transaction>`,
+              text: `<${config.riseExplorerUrl}/tx/${activity.txHash}|View marketplace transaction>`,
             },
           ],
         },
       ],
     });
   } catch (error) {
-    await releaseRnsNotificationDispatch(dispatchKey);
+    await releaseRnsNotificationDispatch({ chainId: activity.chainId, dispatchKey });
     throw error;
   }
 }

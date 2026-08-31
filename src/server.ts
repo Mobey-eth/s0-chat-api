@@ -68,4 +68,12 @@ await app.listen({
 logger.info("Senna chat API listening", {
   port: config.port,
   corsOrigin: config.corsOrigin,
+  network: config.riseNetworkName,
+  chainId: config.riseChainId,
+  rpcOrigin: config.riseRpcOrigin,
+  explorerUrl: config.riseExplorerUrl,
+  rnsContracts: config.rnsContracts,
+  quoteSignerConfigured: Boolean(config.rnsPriceSignerPrivateKey),
+  emailConfigured: Boolean(config.resendApiKey),
+  slackConfigured: Boolean(config.rnsAdminActivitySlackWebhookUrl),
 });

@@ -568,7 +568,7 @@ export function buildCreateToken(input: {
     actionType: "create_token",
     targetRoute: CREATE_TOKEN_ROUTE,
     requiredWallet: "evm",
-    requiredChain: "rise_testnet",
+    requiredChain: "rise_mainnet",
     prefill: {
       name: input.name || "",
       symbol: input.symbol || "",
@@ -578,7 +578,7 @@ export function buildCreateToken(input: {
       tokenType: input.tokenType || "plain",
       tokenImageURI: input.tokenImageURI || "",
     },
-    summary: `Create "${input.name || "..."}" (${input.symbol || "..."}) on RISE Testnet.`,
+    summary: `Create "${input.name || "..."}" (${input.symbol || "..."}) on RISE Mainnet.`,
     warnings: [],
     missingFields: missing,
     nextSteps: [
@@ -615,7 +615,7 @@ export function buildCreateNft(input: {
     actionType: "create_nft",
     targetRoute: CREATE_NFT_ROUTE,
     requiredWallet: "evm",
-    requiredChain: "rise_testnet",
+    requiredChain: "rise_mainnet",
     prefill: {
       mode: input.standard || "erc721",
       name: input.name || "",
@@ -629,7 +629,7 @@ export function buildCreateNft(input: {
       saleStart: input.saleStart || "",
       saleEnd: input.saleEnd || "",
     },
-    summary: `Create NFT collection "${input.name || "..."}" (${input.symbol || "..."}) on RISE Testnet.`,
+    summary: `Create NFT collection "${input.name || "..."}" (${input.symbol || "..."}) on RISE Mainnet.`,
     warnings: [],
     missingFields: missing,
     nextSteps: [
@@ -644,7 +644,7 @@ export function buildCreatePresale(input: { saleToken?: string }): ActionDraft {
     actionType: "create_presale",
     targetRoute: CREATE_PRESALE_ROUTE,
     requiredWallet: "evm",
-    requiredChain: "rise_testnet",
+    requiredChain: "rise_mainnet",
     prefill: {
       saleToken: input.saleToken || "",
     },
@@ -677,7 +677,7 @@ export function buildLockToken(input: {
     actionType: "lock_token",
     targetRoute: withTokenQuery(TOKEN_LOCKER_ROUTE, input.tokenAddress),
     requiredWallet: "evm",
-    requiredChain: "rise_testnet",
+    requiredChain: "rise_mainnet",
     prefill: {
       token: input.tokenAddress || "",
       amount: input.amount || "",
@@ -712,7 +712,7 @@ export function buildAirdrop(input: {
     actionType: "airdrop_tokens",
     targetRoute: withTokenQuery(AIRDROP_ROUTE, input.tokenAddress),
     requiredWallet: "evm",
-    requiredChain: "rise_testnet",
+    requiredChain: "rise_mainnet",
     prefill: {
       token: input.tokenAddress || "",
       recipientsData: input.recipientsData || "",
@@ -735,7 +735,7 @@ export function buildBuyName(input: { name?: string }): ActionDraft {
     actionType: "buy_name",
     targetRoute: withNameQuery(DOMAINS_ROUTE, input.name),
     requiredWallet: "evm",
-    requiredChain: "rise_testnet",
+    requiredChain: "rise_mainnet",
     prefill: {
       name: input.name || "",
     },
@@ -768,7 +768,7 @@ export function buildOpenDashboard(): ActionDraft {
     actionType: "open_dashboard",
     targetRoute: DASHBOARD_ROUTE,
     requiredWallet: "evm",
-    requiredChain: "rise_testnet",
+    requiredChain: "rise_mainnet",
     prefill: {},
     summary: "Open the Stage0 dashboard.",
     warnings: [],

@@ -10,6 +10,21 @@ export async function registerHealthRoutes(app: FastifyInstance) {
     return {
       ok: true,
       service: "senna-chat-api",
+      network: {
+        name: config.riseNetworkName,
+        chainId: config.riseChainId,
+        rpcOrigin: config.riseRpcOrigin,
+        explorerUrl: config.riseExplorerUrl,
+      },
+      rnsContracts: config.rnsContracts,
+      rnsStartBlocks: Object.fromEntries(
+        Object.entries(config.rnsStartBlocks).map(([name, block]) => [name, block.toString()]),
+      ),
+      integrations: {
+        quoteSignerConfigured: Boolean(config.rnsPriceSignerPrivateKey),
+        emailConfigured: Boolean(config.resendApiKey),
+        slackConfigured: Boolean(config.rnsAdminActivitySlackWebhookUrl),
+      },
       docsBaseUrl: config.docsBaseUrl,
       hasDeepSeekKey: Boolean(config.deepseekApiKey),
       modelFast: config.deepseekModelFast,

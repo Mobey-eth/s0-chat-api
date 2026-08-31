@@ -9,7 +9,9 @@ import {
 } from "viem";
 import { z } from "zod";
 import { config } from "../config.js";
+import { takeRateLimit } from "../db.js";
 import { buildRnsPriceQuote, getRnsPricingSummary } from "../rns/pricing.js";
+import { verifyRnsAdminAuthorization } from "../rns/admin-auth.js";
 import {
   listRnsReservedNames,
   getRnsReservedNameById,
@@ -28,6 +30,8 @@ import {
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const NODE_RE = /^0x[a-fA-F0-9]{64}$/;
+const RISE_TESTNET_CHAIN_ID = 11_155_931;
+const RESERVED_ADMIN_CHAIN_IDS = new Set([config.riseChainId, RISE_TESTNET_CHAIN_ID]);
 
 const paramsSchema = z.object({
   wallet: z.string().regex(ADDRESS_RE),
@@ -87,6 +91,11 @@ const reservedBodySchema = z.object({
     .optional(),
   notes: z.string().max(500).nullable().optional(),
   displayOrder: z.coerce.number().int().min(0).max(100_000).optional(),
+  auth: z.object({
+    address: z.string().regex(ADDRESS_RE),
+    timestamp: z.coerce.number().int().positive(),
+    signature: z.string().regex(/^0x[a-fA-F0-9]{130}$/),
+  }),
 });
 
 const reservedActivationBodySchema = z.object({
@@ -96,7 +105,7 @@ const reservedActivationBodySchema = z.object({
 });
 
 const activationClient = createPublicClient({
-  transport: http(config.riseTestnetRpcUrl),
+  transport: http(config.riseRpcUrl),
 });
 
 const reservedActivationRegistrarAbi = parseAbi([
@@ -167,11 +176,11 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       });
     }
 
-    const chainId = parsedQuery.data.chainId ?? config.riseTestnetChainId;
-    if (chainId !== config.riseTestnetChainId) {
+    const chainId = parsedQuery.data.chainId ?? config.riseChainId;
+    if (chainId !== config.riseChainId) {
       return reply.code(400).send({
         error: "unsupported_chain",
-        detail: `Only chainId ${config.riseTestnetChainId} is supported right now.`,
+        detail: `Only chainId ${config.riseChainId} is supported right now.`,
       });
     }
 
@@ -202,11 +211,11 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       });
     }
 
-    const chainId = parsedBody.data.chainId ?? config.riseTestnetChainId;
-    if (chainId !== config.riseTestnetChainId) {
+    const chainId = parsedBody.data.chainId ?? config.riseChainId;
+    if (chainId !== config.riseChainId) {
       return reply.code(400).send({
         error: "unsupported_chain",
-        detail: `Only chainId ${config.riseTestnetChainId} is supported right now.`,
+        detail: `Only chainId ${config.riseChainId} is supported right now.`,
       });
     }
 
@@ -251,11 +260,11 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       });
     }
 
-    const chainId = parsedQuery.data.chainId ?? config.riseTestnetChainId;
-    if (chainId !== config.riseTestnetChainId) {
+    const chainId = parsedQuery.data.chainId ?? config.riseChainId;
+    if (chainId !== config.riseChainId) {
       return reply.code(400).send({
         error: "unsupported_chain",
-        detail: `Only chainId ${config.riseTestnetChainId} is indexed right now.`,
+        detail: `Only chainId ${config.riseChainId} is indexed right now.`,
       });
     }
 
@@ -268,6 +277,15 @@ export async function registerRnsRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/rns/notifications/subscribe", async (request, reply) => {
+    const rateWindow = await takeRateLimit({
+      scope: "rns-notification-subscribe",
+      subject: request.ip,
+      windowSeconds: config.rnsPublicApiRateLimitWindowSeconds,
+    });
+    if (rateWindow.hits > config.rnsPublicApiRateLimitMaxRequests) {
+      return reply.code(429).send({ error: "rate_limited" });
+    }
+
     const parsedBody = notificationBodySchema.safeParse(request.body);
     if (!parsedBody.success) {
       return reply.code(400).send({
@@ -276,11 +294,11 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       });
     }
 
-    const chainId = parsedBody.data.chainId ?? config.riseTestnetChainId;
-    if (chainId !== config.riseTestnetChainId) {
+    const chainId = parsedBody.data.chainId ?? config.riseChainId;
+    if (chainId !== config.riseChainId) {
       return reply.code(400).send({
         error: "unsupported_chain",
-        detail: `Only chainId ${config.riseTestnetChainId} is supported right now.`,
+        detail: `Only chainId ${config.riseChainId} is supported right now.`,
       });
     }
 
@@ -353,11 +371,11 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       });
     }
 
-    const chainId = parsedQuery.data.chainId ?? config.riseTestnetChainId;
-    if (chainId !== config.riseTestnetChainId) {
+    const chainId = parsedQuery.data.chainId ?? config.riseChainId;
+    if (!RESERVED_ADMIN_CHAIN_IDS.has(chainId)) {
       return reply.code(400).send({
         error: "unsupported_chain",
-        detail: `Only chainId ${config.riseTestnetChainId} is supported right now.`,
+        detail: `Reserved inventory supports chainId ${config.riseChainId} (mainnet) and ${RISE_TESTNET_CHAIN_ID} (testnet).`,
       });
     }
 
@@ -377,11 +395,51 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       });
     }
 
-    const chainId = parsedBody.data.chainId ?? config.riseTestnetChainId;
-    if (chainId !== config.riseTestnetChainId) {
+    const chainId = parsedBody.data.chainId ?? config.riseChainId;
+    if (!RESERVED_ADMIN_CHAIN_IDS.has(chainId)) {
       return reply.code(400).send({
         error: "unsupported_chain",
-        detail: `Only chainId ${config.riseTestnetChainId} is supported right now.`,
+        detail: `Reserved inventory supports chainId ${config.riseChainId} (mainnet) and ${RISE_TESTNET_CHAIN_ID} (testnet).`,
+      });
+    }
+
+    const adminPayload = {
+      chainId,
+      label: parsedBody.data.label,
+      category: parsedBody.data.category ?? null,
+      enabled: parsedBody.data.enabled ?? null,
+      saleMode: parsedBody.data.saleMode ?? null,
+      reservePriceWei:
+        parsedBody.data.reservePriceWei === undefined
+          ? null
+          : parsedBody.data.reservePriceWei === null
+            ? null
+            : String(parsedBody.data.reservePriceWei),
+      fixedPriceWei:
+        parsedBody.data.fixedPriceWei === undefined
+          ? null
+          : parsedBody.data.fixedPriceWei === null
+            ? null
+            : String(parsedBody.data.fixedPriceWei),
+      auctionDurationSeconds:
+        parsedBody.data.auctionDurationSeconds === undefined
+          ? null
+          : String(parsedBody.data.auctionDurationSeconds),
+      notes: parsedBody.data.notes ?? null,
+      displayOrder: parsedBody.data.displayOrder ?? null,
+    };
+    const authorized = await verifyRnsAdminAuthorization({
+      action: "upsert_reserved",
+      chainId,
+      timestamp: parsedBody.data.auth.timestamp,
+      address: parsedBody.data.auth.address,
+      signature: parsedBody.data.auth.signature as `0x${string}`,
+      payload: adminPayload,
+    });
+    if (!authorized) {
+      return reply.code(401).send({
+        error: "invalid_admin_authorization",
+        detail: "Sign this reserved-name update with the configured RNS owner wallet.",
       });
     }
 
@@ -445,11 +503,11 @@ export async function registerRnsRoutes(app: FastifyInstance) {
       });
     }
 
-    const chainId = parsedBody.data.chainId ?? config.riseTestnetChainId;
-    if (chainId !== config.riseTestnetChainId) {
+    const chainId = parsedBody.data.chainId ?? config.riseChainId;
+    if (chainId !== config.riseChainId) {
       return reply.code(400).send({
         error: "unsupported_chain",
-        detail: `Only chainId ${config.riseTestnetChainId} is supported right now.`,
+        detail: `Only chainId ${config.riseChainId} is supported right now.`,
       });
     }
 
@@ -472,6 +530,13 @@ export async function registerRnsRoutes(app: FastifyInstance) {
         return reply.code(400).send({
           error: "reserved_activation_reverted",
           detail: "The publication transaction did not succeed.",
+        });
+      }
+
+      if (transaction.from.toLowerCase() !== config.rnsAdminAddress) {
+        return reply.code(401).send({
+          error: "invalid_admin_authorization",
+          detail: "The publication transaction was not sent by the configured RNS owner.",
         });
       }
 

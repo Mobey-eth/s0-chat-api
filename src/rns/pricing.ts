@@ -136,7 +136,7 @@ export async function getRnsPricingSummary(input?: {
     display === null ? null : ((display.totalUsdCents * 10_000n) * WEI_PER_ETH) / ethUsd.priceMicros;
 
   return {
-    chainId: config.riseTestnetChainId,
+    chainId: config.riseChainId,
     ethUsd: ethUsd.priceUsd,
     priceFetchedAt: new Date(ethUsd.fetchedAt).toISOString(),
     multiYearPolicy: {
@@ -209,9 +209,13 @@ export async function buildRnsPriceQuote(input: {
   const years = yearsForDuration(duration);
   const ethUsd = await getEthUsdPrice();
   const reserved =
-    input.action === "fixed_premium_register"
-      ? await getRnsReservedNameByLabel({ chainId: config.riseTestnetChainId, label })
-      : null;
+    input.action === "renew"
+      ? null
+      : await getRnsReservedNameByLabel({ chainId: config.riseChainId, label });
+
+  if (input.action === "register" && reserved) {
+    throw new Error("This name is reserved and cannot use public registration");
+  }
 
   if (input.action === "fixed_premium_register") {
     if (
@@ -254,7 +258,7 @@ export async function buildRnsPriceQuote(input: {
     domain: {
       name: "Stage0 RNS Registrar",
       version: "2",
-      chainId: config.riseTestnetChainId,
+      chainId: config.riseChainId,
       verifyingContract: config.rnsContracts.registrar as Hex,
     },
     types: {
@@ -273,7 +277,7 @@ export async function buildRnsPriceQuote(input: {
   });
 
   return {
-    chainId: config.riseTestnetChainId,
+    chainId: config.riseChainId,
     registrar: config.rnsContracts.registrar,
     label,
     name: `${label}.rise`,

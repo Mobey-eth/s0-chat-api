@@ -31,12 +31,12 @@ export interface Stage0Facts {
 }
 
 const STAGE0_CONTRACTS: Stage0ContractAddresses = {
-  tokenLocker: "0xb225cb8Ea90E0ab1F9f5011d31fD217083c31fc7",
-  nftFactory: "0xCEA1A715927408216B838DcAcd90Dff025Ab0b2D",
-  nftFactoryLens: "0x5F52461ac88ea4a9095A2eD82743Df17E1a1c1af",
-  presaleFactory: "0x67064a9236050D3d947d7F5Bd3448BD4b5D947FC",
-  tokenFactory: "0xa0b761A94013FF721fD682eEB7e57709C0e03f42",
-  airdropMultisender: "0x8DB306030Cf163A6C809fB3599500DBE28Df2CC6",
+  tokenLocker: "0x1A93972280714AB50115Ee839C8861CB37A0Ec61",
+  nftFactory: "0x40Dc4C9655f6273803E0C5F049cFdB1Db026486B",
+  nftFactoryLens: "0xa0b761A94013FF721fD682eEB7e57709C0e03f42",
+  presaleFactory: "0x8DB306030Cf163A6C809fB3599500DBE28Df2CC6",
+  tokenFactory: "0x80046108E1292E5d142BCbfaaC47069348AaBDe8",
+  airdropMultisender: "0xDB7C570a0489cd0aab0B24816FEF06Acc4Fc01E8",
 };
 
 export function getStage0Facts(): Stage0Facts {
@@ -47,12 +47,12 @@ export function getStage0Facts(): Stage0Facts {
       x: config.stage0XUrl,
       discord: config.stage0DiscordUrl,
     },
-    networkName: "RISE Testnet",
-    chainId: config.riseTestnetChainId,
-    rpcUrl: config.riseTestnetRpcUrl,
-    explorerUrl: config.riseTestnetExplorerUrl,
+    networkName: "RISE Mainnet",
+    chainId: config.riseChainId,
+    rpcUrl: config.riseRpcUrl,
+    explorerUrl: config.riseExplorerUrl,
     nativeCurrency: "ETH",
-    faucetUrl: "https://faucet.testnet.riselabs.xyz",
+    faucetUrl: "No faucet (mainnet)",
     contracts: STAGE0_CONTRACTS,
     publicRoutes: ["/", "/presales", "/presales/:address", "/nfts/:address"],
     walletRoutes: [
@@ -71,11 +71,7 @@ export function getStage0Facts(): Stage0Facts {
       "/my-nfts",
       "/locks/:id",
     ],
-    adminRoutes: [
-      "/admin",
-      "/admin/presales",
-      "/admin/whitelist",
-    ],
+    adminRoutes: ["/admin", "/admin/presales"],
   };
 }
 
@@ -85,11 +81,11 @@ export function extractTxHashFromText(message: string) {
 }
 
 export function buildExplorerTxUrl(txHash: string) {
-  return `${config.riseTestnetExplorerUrl}/tx/${txHash}`;
+  return `${config.riseExplorerUrl}/tx/${txHash}`;
 }
 
 export function buildExplorerAddressUrl(address: string) {
-  return `${config.riseTestnetExplorerUrl}/address/${address}`;
+  return `${config.riseExplorerUrl}/address/${address}`;
 }
 
 export function buildStage0ContextBlock(): string {

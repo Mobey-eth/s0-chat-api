@@ -3,12 +3,28 @@ import { z } from "zod";
 
 loadEnv();
 
-const RNS_V2_START_BLOCK = 49_715_519n;
+const RISE_MAINNET_CHAIN_ID = 4_153;
+const RISE_MAINNET_NAME = "RISE Mainnet";
+const STAGE0_MAINNET_ADMIN = "0x78d2e9D2B81D94ED27310d61e5f9e1C4db35fba5";
+const RNS_REGISTRY_START_BLOCK = 20_079_518n;
+const RNS_RESOLVER_START_BLOCK = 20_079_521n;
+const RNS_REGISTRAR_START_BLOCK = 20_079_523n;
+const RNS_AUCTION_HOUSE_START_BLOCK = 20_079_526n;
+const RNS_MARKETPLACE_START_BLOCK = 20_079_528n;
+
+const envBoolean = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return value;
+}, z.boolean());
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().min(1),
-  DATABASE_SSL: z.coerce.boolean().default(true),
+  DATABASE_SSL: envBoolean.default(true),
   PORT: z.coerce.number().int().positive().optional(),
   CHAT_API_PORT: z.coerce.number().int().positive().default(8788),
   CHAT_CORS_ORIGIN: z.string().min(1).default("*"),
@@ -22,23 +38,30 @@ const envSchema = z.object({
   STAGE0_UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
   STAGE0_DOCS_BASE_URL: z.string().url().default("https://stagezerolabs.gitbook.io/stage0"),
   STAGE0_DOCS_SEED_URLS: z.string().default(""),
-  RISE_TESTNET_RPC_URL: z.string().url().default("https://testnet.riselabs.xyz"),
-  RISE_TESTNET_CHAIN_ID: z.coerce.number().int().positive().default(11155931),
-  RISE_TESTNET_EXPLORER_URL: z.string().url().default("https://explorer.testnet.riselabs.xyz"),
-  RNS_REGISTRY_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x18E2B26E04B624131630355f00655330FAcb3d0C"),
-  RNS_RESOLVER_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x50593CAB471272c0D67014F6233eAcb897F5d705"),
-  RNS_REGISTRAR_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x87e6e5fA7E63fF008d8Dc5347503a8ED5d6bdA77"),
-  RNS_AUCTION_HOUSE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0xaCb8DE38FD057ed8288BAa6AE60434FBB5f1DEd0"),
-  RNS_MARKETPLACE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x92b421f992892e26074e9529f61acf1b86f13bd7"),
+  RISE_RPC_URL: z.string().url().default("https://rpc.risechain.com"),
+  RISE_CHAIN_ID: z.coerce
+    .number()
+    .int()
+    .refine((value) => value === RISE_MAINNET_CHAIN_ID, {
+      message: `RISE_CHAIN_ID must be ${RISE_MAINNET_CHAIN_ID} for the mainnet service`,
+    })
+    .default(RISE_MAINNET_CHAIN_ID),
+  RISE_EXPLORER_URL: z.string().url().default("https://explorer.risechain.com"),
+  RNS_REGISTRY_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x6DDca710993C91402d52061868bE76043a4C5888"),
+  RNS_RESOLVER_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x36D6383774631565AB0D8F3710748610631A675d"),
+  RNS_REGISTRAR_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0xbCA437a93C2E7396a68Ce49BE224F65eE3CFd6Db"),
+  RNS_AUCTION_HOUSE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x0E37994c19980A792B83A106cE03a9b8a9cD40Fc"),
+  RNS_MARKETPLACE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default("0x323A04F474f80225DE60C1Af13a672796aFA6622"),
+  RNS_ADMIN_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/).default(STAGE0_MAINNET_ADMIN),
   RNS_SYNC_INTERVAL_SECONDS: z.coerce.number().int().positive().default(180),
   RNS_AUCTION_LIFECYCLE_INTERVAL_SECONDS: z.coerce.number().int().min(60).max(300).default(180),
   RNS_RECONCILE_INTERVAL_SECONDS: z.coerce.number().int().positive().default(12 * 60 * 60),
   RNS_SYNC_CHUNK_SIZE: z.coerce.number().int().positive().default(5_000),
-  RNS_REGISTRY_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_V2_START_BLOCK),
-  RNS_RESOLVER_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_V2_START_BLOCK),
-  RNS_REGISTRAR_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_V2_START_BLOCK),
-  RNS_AUCTION_HOUSE_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_V2_START_BLOCK),
-  RNS_MARKETPLACE_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_V2_START_BLOCK),
+  RNS_REGISTRY_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_REGISTRY_START_BLOCK),
+  RNS_RESOLVER_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_RESOLVER_START_BLOCK),
+  RNS_REGISTRAR_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_REGISTRAR_START_BLOCK),
+  RNS_AUCTION_HOUSE_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_AUCTION_HOUSE_START_BLOCK),
+  RNS_MARKETPLACE_START_BLOCK: z.coerce.bigint().nonnegative().default(RNS_MARKETPLACE_START_BLOCK),
   RNS_PRICE_SIGNER_PRIVATE_KEY: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
   RNS_PRICE_QUOTE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   RNS_PRICE_SOURCE_URL: z.string().url().default("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"),
@@ -83,9 +106,11 @@ export const config = {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean),
-  riseTestnetRpcUrl: env.RISE_TESTNET_RPC_URL,
-  riseTestnetChainId: env.RISE_TESTNET_CHAIN_ID,
-  riseTestnetExplorerUrl: env.RISE_TESTNET_EXPLORER_URL.replace(/\/$/, ""),
+  riseRpcUrl: env.RISE_RPC_URL,
+  riseRpcOrigin: new URL(env.RISE_RPC_URL).origin,
+  riseNetworkName: RISE_MAINNET_NAME,
+  riseChainId: env.RISE_CHAIN_ID,
+  riseExplorerUrl: env.RISE_EXPLORER_URL.replace(/\/$/, ""),
   rnsContracts: {
     registry: env.RNS_REGISTRY_ADDRESS.toLowerCase(),
     resolver: env.RNS_RESOLVER_ADDRESS.toLowerCase(),
@@ -93,6 +118,7 @@ export const config = {
     auctionHouse: env.RNS_AUCTION_HOUSE_ADDRESS.toLowerCase(),
     marketplace: env.RNS_MARKETPLACE_ADDRESS.toLowerCase(),
   },
+  rnsAdminAddress: env.RNS_ADMIN_ADDRESS.toLowerCase(),
   rnsSyncIntervalSeconds: env.RNS_SYNC_INTERVAL_SECONDS,
   rnsAuctionLifecycleIntervalSeconds: env.RNS_AUCTION_LIFECYCLE_INTERVAL_SECONDS,
   rnsReconcileIntervalSeconds: env.RNS_RECONCILE_INTERVAL_SECONDS,

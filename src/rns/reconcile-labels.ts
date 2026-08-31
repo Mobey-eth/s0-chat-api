@@ -17,7 +17,7 @@ if (labels.length === 0) {
     for (const label of labels) {
       const record = await reconcileRnsKnownLabel({
         label,
-        chainId: config.riseTestnetChainId,
+        chainId: config.riseChainId,
         reason: "manual-cli",
       });
       results.push({
@@ -28,7 +28,7 @@ if (labels.length === 0) {
         node: record?.node ?? null,
       });
     }
-    console.log(JSON.stringify({ ok: true, chainId: config.riseTestnetChainId, results }, null, 2));
+    console.log(JSON.stringify({ ok: true, chainId: config.riseChainId, results }, null, 2));
   } finally {
     await pool.end();
   }

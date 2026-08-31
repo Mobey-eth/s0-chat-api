@@ -3252,6 +3252,7 @@ export async function hasRnsNotificationDispatch(dispatchKey: string) {
 }
 
 export async function claimRnsNotificationDispatch(input: {
+  chainId: number;
   channel: "email" | "admin_slack";
   dispatchKey: string;
   subscriptionId?: number | null;
@@ -3264,6 +3265,7 @@ export async function claimRnsNotificationDispatch(input: {
   const result = await pool.query<{ id: string }>(
     `
       insert into stage0_rns.notification_dispatches (
+        chain_id,
         channel,
         dispatch_key,
         subscription_id,
@@ -3273,11 +3275,12 @@ export async function claimRnsNotificationDispatch(input: {
         log_index,
         detail
       )
-      values ($1, $2, $3, $4, $5, lower($6), $7, $8::jsonb)
+      values ($1, $2, $3, $4, $5, $6, lower($7), $8, $9::jsonb)
       on conflict (dispatch_key) do nothing
       returning id::text
     `,
     [
+      input.chainId,
       input.channel,
       input.dispatchKey,
       input.subscriptionId ?? null,
@@ -3292,10 +3295,13 @@ export async function claimRnsNotificationDispatch(input: {
   return result.rowCount === 1;
 }
 
-export async function releaseRnsNotificationDispatch(dispatchKey: string) {
+export async function releaseRnsNotificationDispatch(input: {
+  chainId: number;
+  dispatchKey: string;
+}) {
   await pool.query(
-    `delete from stage0_rns.notification_dispatches where dispatch_key = $1`,
-    [dispatchKey],
+    `delete from stage0_rns.notification_dispatches where chain_id = $1 and dispatch_key = $2`,
+    [input.chainId, input.dispatchKey],
   );
 }
 
@@ -3391,6 +3397,7 @@ export async function failRnsAuctionLifecycleDispatch(input: {
 }
 
 export async function recordRnsNotificationDispatch(input: {
+  chainId: number;
   channel: "email" | "admin_slack";
   dispatchKey: string;
   subscriptionId?: number | null;
@@ -3403,6 +3410,7 @@ export async function recordRnsNotificationDispatch(input: {
   await pool.query(
     `
       insert into stage0_rns.notification_dispatches (
+        chain_id,
         channel,
         dispatch_key,
         subscription_id,
@@ -3412,10 +3420,11 @@ export async function recordRnsNotificationDispatch(input: {
         log_index,
         detail
       )
-      values ($1, $2, $3, $4, $5, lower($6), $7, $8::jsonb)
+      values ($1, $2, $3, $4, $5, $6, lower($7), $8, $9::jsonb)
       on conflict (dispatch_key) do nothing
     `,
     [
+      input.chainId,
       input.channel,
       input.dispatchKey,
       input.subscriptionId ?? null,

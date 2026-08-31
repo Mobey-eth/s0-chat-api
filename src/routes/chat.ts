@@ -280,7 +280,7 @@ function actionDraftFromStored(stored: NonNullable<Awaited<ReturnType<typeof get
     actionType: stored.actionType as ActionType,
     targetRoute: stored.route,
     requiredWallet: (stored.requiredWallet as "evm" | null) ?? null,
-    requiredChain: (stored.requiredChain as "rise_testnet" | null) ?? null,
+    requiredChain: (stored.requiredChain as "rise_mainnet" | null) ?? null,
     prefill: stored.prefill,
     summary: stored.summary,
     warnings: stored.warnings,
@@ -387,7 +387,7 @@ async function buildPostTurnSuggestions(input: {
           content: [
             "You generate 1 to 3 very short follow-up prompts that the user might tap.",
             "Each suggestion must be 5 words or fewer, no quotes, no trailing punctuation.",
-            "Suggestions must keep the user inside Stage0 topics (token, NFT, lock, airdrop, name, launch, dashboard, presale, wallet, RISE testnet).",
+            "Suggestions must keep the user inside Stage0 topics (token, NFT, lock, airdrop, name, launch, dashboard, presale, wallet, RISE Mainnet).",
             "Output STRICT JSON: an array of strings. No commentary.",
           ].join("\n"),
         },

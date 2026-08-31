@@ -25,7 +25,7 @@ const DEFAULT_STAGE0_DOC_URLS = [
 ];
 
 const DEFAULT_RISE_DOC_URLS = [
-  "https://docs.risechain.com/docs/builders/testnet-details.mdx",
+  "https://docs.risechain.com/docs",
   "https://docs.risechain.com/docs/builders/quick-start.mdx",
   "https://docs.risechain.com/docs/rise-wallet.mdx",
 ];
