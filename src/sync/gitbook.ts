@@ -71,6 +71,17 @@ function normalizeUrl(baseUrl: string, url: string): string | null {
   }
 }
 
+function isDisallowedDocUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "docs.risechain.com") return false;
+
+    return /(?:^|\/)(?:testnet|faucet)(?:[-/]|$)/i.test(parsed.pathname);
+  } catch {
+    return true;
+  }
+}
+
 function extractMarkdownContent(markdown: string): { title: string; text: string } {
   const title =
     markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ??
@@ -124,6 +135,7 @@ function discoverLinks($: cheerio.CheerioAPI, baseUrl: string): string[] {
 
     const normalized = normalizeUrl(baseUrl, href);
     if (!normalized) return;
+    if (isDisallowedDocUrl(normalized)) return;
 
     const parsed = new URL(normalized);
     if (!allowedHosts.has(parsed.hostname)) return;
@@ -141,7 +153,29 @@ async function getSyncedUrls(): Promise<Set<string>> {
   return new Set(result.rows.map((row) => row.source_url));
 }
 
+async function cleanupDisallowedDocSources() {
+  const result = await pool.query<{ source_url: string }>(
+    `select source_url from senna.doc_sources`,
+  );
+  const disallowed = result.rows
+    .map((row) => row.source_url)
+    .filter(isDisallowedDocUrl);
+
+  if (disallowed.length === 0) return;
+
+  await pool.query(
+    `delete from senna.doc_sources where source_url = any($1::text[])`,
+    [disallowed],
+  );
+  logger.info("Removed non-mainnet doc sources", { count: disallowed.length });
+}
+
 async function syncUrl(url: string) {
+  if (isDisallowedDocUrl(url)) {
+    logger.warn("Skipping non-mainnet doc URL", { url });
+    return;
+  }
+
   const response = await fetch(url, {
     headers: { "user-agent": USER_AGENT },
   });
@@ -246,11 +280,13 @@ async function getBundledGuidePaths() {
 
 async function main() {
   await runMigrations();
+  await cleanupDisallowedDocSources();
 
-  const seedUrls =
+  const seedUrls = (
     config.docsSeedUrls.length > 0
       ? config.docsSeedUrls
-      : [...DEFAULT_STAGE0_DOC_URLS, ...DEFAULT_RISE_DOC_URLS];
+      : [...DEFAULT_STAGE0_DOC_URLS, ...DEFAULT_RISE_DOC_URLS]
+  ).filter((url) => !isDisallowedDocUrl(url));
   const synced = await getSyncedUrls();
   const toVisit: string[] = [];
   const visited = new Set<string>();
