@@ -1,6 +1,7 @@
 import { formatEther } from "viem";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
+import { postSlack } from "../slack.js";
 import { getEthUsdPrice } from "./pricing.js";
 import {
   claimRnsAuctionLifecycleDispatch,
@@ -133,24 +134,6 @@ function escapeHtml(value: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-async function postSlack(payload: { text: string; blocks?: unknown[] }) {
-  if (!config.rnsAdminActivitySlackWebhookUrl) return false;
-
-  const response = await fetch(config.rnsAdminActivitySlackWebhookUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Slack webhook failed with status ${response.status}`);
-  }
-
-  return true;
 }
 
 async function sendEmail(input: { to: string; subject: string; html: string }) {

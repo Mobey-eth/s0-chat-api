@@ -1,5 +1,6 @@
 import { config } from "./config.js";
 import type { CreatorApplicationRecord } from "./db.js";
+import { postSlack } from "./slack.js";
 
 function escapeHtml(value: string) {
   return value
@@ -59,50 +60,36 @@ function teamText(application: CreatorApplicationRecord) {
     .join("\n");
 }
 
-async function sendSlack(application: CreatorApplicationRecord) {
-  if (!config.rnsAdminActivitySlackWebhookUrl) return "skipped" as const;
-
+export async function sendCreatorApplicationSlack(application: CreatorApplicationRecord) {
   const title = application.applicationType === "nft" ? "New NFT creator application" : "New token launch application";
   const rows = applicationRows(application);
-  const fields = rows.slice(0, 10).map(([label, value]) => ({
+  const fields = rows.map(([label, value]) => ({
     type: "mrkdwn",
     text: `*${escapeSlack(label)}*\n${escapeSlack(value).slice(0, 900)}`,
   }));
-  const response = await fetch(config.rnsAdminActivitySlackWebhookUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      text: `${title}: ${application.projectName}`,
-      blocks: [
-        { type: "header", text: { type: "plain_text", text: title } },
-        { type: "section", text: { type: "mrkdwn", text: `*${escapeSlack(application.projectName)}*\n${escapeSlack(application.projectDescription).slice(0, 2600)}` } },
-        { type: "section", fields },
-        { type: "section", text: { type: "mrkdwn", text: `*Team*\n${escapeSlack(teamText(application)).slice(0, 2800)}` } },
-        ...(application.imageUrl
-          ? [{ type: "image", image_url: application.imageUrl, alt_text: `${application.projectName} project image` }]
-          : []),
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: { type: "plain_text", text: "Review in Stage0" },
-              url: `${config.stage0AppUrl}/admin`,
-            },
-          ],
-        },
-        {
-          type: "context",
-          elements: [
-            { type: "mrkdwn", text: `${config.riseNetworkName} (${application.chainId}) · Application ${application.id}` },
-          ],
-        },
-      ],
-    }),
+  const fieldSections = Array.from({ length: Math.ceil(fields.length / 10) }, (_, index) => ({
+    type: "section",
+    fields: fields.slice(index * 10, index * 10 + 10),
+  }));
+  const context = [
+    `<${config.stage0AppUrl}/admin|Review in Stage0>`,
+    ...(application.imageUrl ? [`<${application.imageUrl}|Project image>`] : []),
+    `${config.riseNetworkName} (${application.chainId})`,
+    `Application ${application.id}`,
+  ].join(" · ");
+
+  const sent = await postSlack({
+    text: `${title}: ${application.projectName}`,
+    blocks: [
+      { type: "header", text: { type: "plain_text", text: title } },
+      { type: "section", text: { type: "mrkdwn", text: `*${escapeSlack(application.projectName)}*\n${escapeSlack(application.projectDescription).slice(0, 2600)}` } },
+      ...fieldSections,
+      { type: "section", text: { type: "mrkdwn", text: `*Team*\n${escapeSlack(teamText(application)).slice(0, 2800)}` } },
+      { type: "context", elements: [{ type: "mrkdwn", text: context }] },
+    ],
   });
 
-  if (!response.ok) throw new Error(`Slack webhook failed with status ${response.status}`);
-  return "sent" as const;
+  return sent ? "sent" as const : "skipped" as const;
 }
 
 async function sendEmail(application: CreatorApplicationRecord) {
@@ -160,7 +147,7 @@ async function sendEmail(application: CreatorApplicationRecord) {
 }
 
 export async function notifyCreatorApplication(application: CreatorApplicationRecord) {
-  const [slack, email] = await Promise.allSettled([sendSlack(application), sendEmail(application)]);
+  const [slack, email] = await Promise.allSettled([sendCreatorApplicationSlack(application), sendEmail(application)]);
   const errors = [slack, email]
     .filter((result): result is PromiseRejectedResult => result.status === "rejected")
     .map((result) => (result.reason instanceof Error ? result.reason.message : String(result.reason)));
