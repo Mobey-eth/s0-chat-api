@@ -738,6 +738,422 @@ export async function getTokenImages(input: {
   );
 }
 
+export type CreatorApplicationType = "nft" | "presale";
+export type CreatorApplicationStatus = "pending" | "approved" | "rejected";
+
+export type CreatorTeamMember = {
+  name: string;
+  role: string;
+  x?: string;
+  telegram?: string;
+  discord?: string;
+};
+
+export interface CreatorApplicationRecord {
+  id: string;
+  chainId: number;
+  applicationType: CreatorApplicationType;
+  applicantWallet: string;
+  founderAddressInput: string;
+  founderName: string;
+  founderRole: string;
+  founderEmail: string;
+  founderX?: string;
+  founderTelegram?: string;
+  founderDiscord?: string;
+  projectName: string;
+  projectDescription: string;
+  projectStage: string;
+  projectWebsiteUrl?: string;
+  projectX?: string;
+  projectTelegram?: string;
+  projectDiscord?: string;
+  projectDetails: Record<string, string>;
+  teamMembers: CreatorTeamMember[];
+  imageUrl?: string;
+  imageMimeType?: string;
+  imageSizeBytes?: number;
+  status: CreatorApplicationStatus;
+  reviewNotes?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  notificationStatus: "pending" | "sent" | "partial" | "failed" | "skipped";
+  notificationError?: string;
+  submittedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type CreatorApplicationRow = {
+  id: string;
+  chain_id: number;
+  application_type: CreatorApplicationType;
+  applicant_wallet: string;
+  founder_address_input: string;
+  founder_name: string;
+  founder_role: string;
+  founder_email: string;
+  founder_x: string | null;
+  founder_telegram: string | null;
+  founder_discord: string | null;
+  project_name: string;
+  project_description: string;
+  project_stage: string;
+  project_website_url: string | null;
+  project_x: string | null;
+  project_telegram: string | null;
+  project_discord: string | null;
+  project_details: Record<string, string> | null;
+  team_members: CreatorTeamMember[] | null;
+  image_url: string | null;
+  image_mime_type: string | null;
+  image_size_bytes: number | null;
+  status: CreatorApplicationStatus;
+  review_notes: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  notification_status: CreatorApplicationRecord["notificationStatus"];
+  notification_error: string | null;
+  submitted_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function toCreatorApplicationRecord(row: CreatorApplicationRow): CreatorApplicationRecord {
+  return {
+    id: row.id,
+    chainId: row.chain_id,
+    applicationType: row.application_type,
+    applicantWallet: row.applicant_wallet,
+    founderAddressInput: row.founder_address_input,
+    founderName: row.founder_name,
+    founderRole: row.founder_role,
+    founderEmail: row.founder_email,
+    founderX: row.founder_x ?? undefined,
+    founderTelegram: row.founder_telegram ?? undefined,
+    founderDiscord: row.founder_discord ?? undefined,
+    projectName: row.project_name,
+    projectDescription: row.project_description,
+    projectStage: row.project_stage,
+    projectWebsiteUrl: row.project_website_url ?? undefined,
+    projectX: row.project_x ?? undefined,
+    projectTelegram: row.project_telegram ?? undefined,
+    projectDiscord: row.project_discord ?? undefined,
+    projectDetails: row.project_details ?? {},
+    teamMembers: row.team_members ?? [],
+    imageUrl: row.image_url ?? undefined,
+    imageMimeType: row.image_mime_type ?? undefined,
+    imageSizeBytes: row.image_size_bytes ?? undefined,
+    status: row.status,
+    reviewNotes: row.review_notes ?? undefined,
+    reviewedBy: row.reviewed_by ?? undefined,
+    reviewedAt: row.reviewed_at ?? undefined,
+    notificationStatus: row.notification_status,
+    notificationError: row.notification_error ?? undefined,
+    submittedAt: row.submitted_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const CREATOR_APPLICATION_COLUMNS = `
+  id, chain_id, application_type, applicant_wallet, founder_address_input,
+  founder_name, founder_role, founder_email, founder_x, founder_telegram,
+  founder_discord, project_name, project_description, project_stage,
+  project_website_url, project_x, project_telegram, project_discord,
+  project_details, team_members, image_url, image_mime_type, image_size_bytes,
+  status, review_notes, reviewed_by, reviewed_at, notification_status,
+  notification_error, submitted_at, created_at, updated_at
+`;
+
+export async function upsertCreatorApplication(input: {
+  id: string;
+  chainId: number;
+  applicationType: CreatorApplicationType;
+  applicantWallet: string;
+  founderAddressInput: string;
+  founderName: string;
+  founderRole: string;
+  founderEmail: string;
+  founderX?: string | null;
+  founderTelegram?: string | null;
+  founderDiscord?: string | null;
+  projectName: string;
+  projectDescription: string;
+  projectStage: string;
+  projectWebsiteUrl?: string | null;
+  projectX?: string | null;
+  projectTelegram?: string | null;
+  projectDiscord?: string | null;
+  projectDetails: Record<string, string>;
+  teamMembers: CreatorTeamMember[];
+  imageUrl: string;
+  imageMimeType: string;
+  imageSizeBytes: number;
+  imageData: Buffer;
+}): Promise<CreatorApplicationRecord> {
+  const result = await pool.query<CreatorApplicationRow>(
+    `
+      insert into senna.creator_applications (
+        id, chain_id, application_type, applicant_wallet, founder_address_input,
+        founder_name, founder_role, founder_email, founder_x, founder_telegram,
+        founder_discord, project_name, project_description, project_stage,
+        project_website_url, project_x, project_telegram, project_discord,
+        project_details, team_members, image_url, image_mime_type,
+        image_size_bytes, image_data
+      ) values (
+        $1, $2, $3, lower($4), $5, $6, $7, lower($8), $9, $10, $11,
+        $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb,
+        $21, $22, $23, $24
+      )
+      on conflict (chain_id, application_type, applicant_wallet) where status = 'pending'
+      do update set
+        founder_address_input = excluded.founder_address_input,
+        founder_name = excluded.founder_name,
+        founder_role = excluded.founder_role,
+        founder_email = excluded.founder_email,
+        founder_x = excluded.founder_x,
+        founder_telegram = excluded.founder_telegram,
+        founder_discord = excluded.founder_discord,
+        project_name = excluded.project_name,
+        project_description = excluded.project_description,
+        project_stage = excluded.project_stage,
+        project_website_url = excluded.project_website_url,
+        project_x = excluded.project_x,
+        project_telegram = excluded.project_telegram,
+        project_discord = excluded.project_discord,
+        project_details = excluded.project_details,
+        team_members = excluded.team_members,
+        image_url = senna.creator_applications.image_url,
+        image_mime_type = excluded.image_mime_type,
+        image_size_bytes = excluded.image_size_bytes,
+        image_data = excluded.image_data,
+        notification_status = 'pending',
+        notification_error = null,
+        submitted_at = now(),
+        updated_at = now()
+      returning ${CREATOR_APPLICATION_COLUMNS}
+    `,
+    [
+      input.id,
+      input.chainId,
+      input.applicationType,
+      input.applicantWallet,
+      input.founderAddressInput,
+      input.founderName,
+      input.founderRole,
+      input.founderEmail,
+      input.founderX ?? null,
+      input.founderTelegram ?? null,
+      input.founderDiscord ?? null,
+      input.projectName,
+      input.projectDescription,
+      input.projectStage,
+      input.projectWebsiteUrl ?? null,
+      input.projectX ?? null,
+      input.projectTelegram ?? null,
+      input.projectDiscord ?? null,
+      JSON.stringify(input.projectDetails),
+      JSON.stringify(input.teamMembers),
+      input.imageUrl,
+      input.imageMimeType,
+      input.imageSizeBytes,
+      input.imageData,
+    ],
+  );
+
+  return toCreatorApplicationRecord(result.rows[0]);
+}
+
+export async function getCreatorApplicationImage(id: string): Promise<StoredImageAsset | null> {
+  const result = await pool.query<{
+    image_data: Buffer;
+    image_mime_type: string;
+    image_size_bytes: number;
+  }>(
+    `
+      select image_data, image_mime_type, image_size_bytes
+      from senna.creator_applications
+      where id = $1 and image_data is not null
+    `,
+    [id],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    imageData: row.image_data,
+    imageMimeType: row.image_mime_type,
+    imageSizeBytes: row.image_size_bytes,
+  };
+}
+
+export async function getCreatorAccess(input: { chainId: number; walletAddress: string }) {
+  const [approvals, applications] = await Promise.all([
+    pool.query<{ application_type: CreatorApplicationType; approved: boolean }>(
+      `
+        select application_type, approved
+        from senna.creator_approvals
+        where chain_id = $1 and wallet_address = lower($2)
+      `,
+      [input.chainId, input.walletAddress],
+    ),
+    pool.query<{
+      application_type: CreatorApplicationType;
+      id: string;
+      status: CreatorApplicationStatus;
+      project_name: string;
+      submitted_at: string;
+      review_notes: string | null;
+    }>(
+      `
+        select distinct on (application_type)
+          application_type, id, status, project_name, submitted_at, review_notes
+        from senna.creator_applications
+        where chain_id = $1 and applicant_wallet = lower($2)
+        order by application_type, submitted_at desc
+      `,
+      [input.chainId, input.walletAddress],
+    ),
+  ]);
+
+  const approvalMap = new Map(approvals.rows.map((row) => [row.application_type, row.approved]));
+  const applicationMap = new Map(applications.rows.map((row) => [row.application_type, row]));
+  const latestApplication = (applicationType: CreatorApplicationType) => {
+    const row = applicationMap.get(applicationType);
+    if (!row) return null;
+    return {
+      id: row.id,
+      applicationType: row.application_type,
+      status: row.status,
+      projectName: row.project_name,
+      submittedAt: row.submitted_at,
+      reviewNotes: row.review_notes,
+    };
+  };
+  return {
+    nft: {
+      approved: approvalMap.get("nft") === true,
+      application: latestApplication("nft"),
+    },
+    presale: {
+      approved: approvalMap.get("presale") === true,
+      application: latestApplication("presale"),
+    },
+  };
+}
+
+export async function listCreatorApplications(input: {
+  chainId: number;
+  status?: CreatorApplicationStatus;
+  limit?: number;
+}) {
+  const result = await pool.query<CreatorApplicationRow>(
+    `
+      select ${CREATOR_APPLICATION_COLUMNS}
+      from senna.creator_applications
+      where chain_id = $1
+        and ($2::text is null or status = $2)
+      order by
+        case status when 'pending' then 0 when 'approved' then 1 else 2 end,
+        submitted_at desc
+      limit $3
+    `,
+    [input.chainId, input.status ?? null, input.limit ?? 100],
+  );
+  return result.rows.map(toCreatorApplicationRecord);
+}
+
+export async function setCreatorApproval(input: {
+  chainId: number;
+  applicationType: CreatorApplicationType;
+  walletAddress: string;
+  approved: boolean;
+  approvedBy: string;
+  applicationId?: string | null;
+  notes?: string | null;
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      `
+        insert into senna.creator_approvals (
+          chain_id, application_type, wallet_address, approved,
+          application_id, approved_by, notes, approved_at
+        ) values ($1, $2, lower($3), $4, $5, lower($6), $7, case when $4 then now() else null end)
+        on conflict (chain_id, application_type, wallet_address)
+        do update set
+          approved = excluded.approved,
+          application_id = coalesce(excluded.application_id, senna.creator_approvals.application_id),
+          approved_by = excluded.approved_by,
+          notes = excluded.notes,
+          approved_at = case when excluded.approved then now() else null end,
+          updated_at = now()
+      `,
+      [
+        input.chainId,
+        input.applicationType,
+        input.walletAddress,
+        input.approved,
+        input.applicationId ?? null,
+        input.approvedBy,
+        input.notes ?? null,
+      ],
+    );
+
+    if (input.applicationId) {
+      await client.query(
+        `
+          update senna.creator_applications
+          set status = $1,
+              review_notes = $2,
+              reviewed_by = lower($3),
+              reviewed_at = now(),
+              updated_at = now()
+          where id = $4
+            and chain_id = $5
+            and application_type = $6
+            and applicant_wallet = lower($7)
+        `,
+        [
+          input.approved ? "approved" : "rejected",
+          input.notes ?? null,
+          input.approvedBy,
+          input.applicationId,
+          input.chainId,
+          input.applicationType,
+          input.walletAddress,
+        ],
+      );
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  return getCreatorAccess({ chainId: input.chainId, walletAddress: input.walletAddress });
+}
+
+export async function markCreatorApplicationNotification(input: {
+  id: string;
+  status: CreatorApplicationRecord["notificationStatus"];
+  error?: string | null;
+}) {
+  await pool.query(
+    `
+      update senna.creator_applications
+      set notification_status = $2,
+          notification_error = $3,
+          updated_at = now()
+      where id = $1
+    `,
+    [input.id, input.status, input.error ?? null],
+  );
+}
+
 export async function getHealthCounts() {
   const [sources, chunks] = await Promise.all([
     pool.query<{ count: string }>(`select count(*)::text as count from senna.doc_sources`),

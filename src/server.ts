@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { closeDb } from "./db.js";
 import { logger } from "./logger.js";
 import { registerChatRoutes } from "./routes/chat.js";
+import { registerCreatorApplicationRoutes } from "./routes/creator-applications.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerNftMetadataRoutes } from "./routes/nft-metadata.js";
@@ -29,6 +30,7 @@ await app.register(multipart, {
 });
 
 await registerHealthRoutes(app);
+await registerCreatorApplicationRoutes(app);
 await registerImageRoutes(app);
 await registerNftMetadataRoutes(app);
 await registerPublicRnsRoutes(app);
