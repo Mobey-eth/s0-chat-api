@@ -56,7 +56,7 @@ VITE_SENNA_CHAT_API_URL=https://api.stage0.xyz
 Backend env:
 
 ```bash
-STAGE0_API_PUBLIC_URL=https://api.stage0.xyz
+STAGE0_API_PUBLIC_URL=https://stage0.xyz
 ```
 
 ## Already Done
@@ -293,7 +293,7 @@ CHAT_INPUT_MAX_CHARS=600
 CHAT_OUTPUT_MAX_TOKENS_FAST=220
 CHAT_OUTPUT_MAX_TOKENS_DEEP=420
 
-STAGE0_API_PUBLIC_URL=https://api.stage0.xyz
+STAGE0_API_PUBLIC_URL=https://stage0.xyz
 STAGE0_APP_URL=https://stage0.xyz
 STAGE0_UPLOAD_MAX_BYTES=2097152
 
