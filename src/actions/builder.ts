@@ -305,7 +305,7 @@ function parseDirectTokenNameAnswer(message: string) {
     !/^[A-Za-z0-9][A-Za-z0-9 &'._-]*$/.test(trimmed) ||
     /^\d+$/.test(trimmed) ||
     /^0x[a-fA-F0-9]{40}$/.test(trimmed) ||
-    /^(?:yes|no|cancel|stop|skip|default|okay|ok)$/i.test(trimmed) ||
+    /^(?:yes|no|cancel|stop|skip|default|okay|ok|start(?: it)?|go ahead|do it)$/i.test(trimmed) ||
     /\b(?:symbol|ticker|supply|amount|decimals?|token\s*type|mintable|burnable|taxable|non[-\s]?mintable|fixed\s+supply)\b/i.test(trimmed) ||
     /^(?:create|deploy|make|launch)(?:\s+(?:a|an|new))?\s+(?:erc[-\s]?20\s+)?token$/i.test(trimmed)
   ) {
@@ -323,7 +323,7 @@ function parseDirectCollectionNameAnswer(message: string) {
     trimmed.length > 64 ||
     !/^[A-Za-z0-9][A-Za-z0-9 &'._-]*$/.test(trimmed) ||
     /^\d+$/.test(trimmed) ||
-    /^(?:yes|no|cancel|stop|skip|default|okay|ok)$/i.test(trimmed) ||
+    /^(?:yes|no|cancel|stop|skip|default|okay|ok|start(?: it)?|go ahead|do it)$/i.test(trimmed) ||
     /\b(?:symbol|ticker|base\s*uri|metadata|image\s*uri|max\s*supply|mint\s*price|sale\s*(?:start|end))\b/i.test(trimmed) ||
     /^(?:create|deploy|make|launch|mint)(?:\s+(?:a|an|new))?\s+(?:nft|collection|drop)$/i.test(trimmed)
   ) {

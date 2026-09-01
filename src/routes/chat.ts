@@ -139,7 +139,8 @@ function isNegativeConfirmation(message: string) {
 function stripConfirmationPrefix(message: string) {
   return message
     .trim()
-    .replace(/^(yes|yeah|yep|yup|sure|correct|right|that'?s right|please|start|start it|go ahead|do it|sounds good|exactly)[,!.:\s]*/i, "")
+    .replace(/^(?:that'?s right|sounds good|yes|yeah|yep|yup|sure|correct|right|please|exactly)[,!.:\s]*/i, "")
+    .replace(/^(?:start it|start|go ahead|do it)[,!.:\s]*/i, "")
     .trim();
 }
 

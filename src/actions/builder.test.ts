@@ -40,6 +40,15 @@ test("a one-word token name does not also populate the symbol", () => {
   assert.equal(draft.missingFields[0], "symbol");
 });
 
+test("confirmation language cannot become an action name", () => {
+  const tokenDraft = startQuickAction("create_token");
+  const nftDraft = startQuickAction("create_nft");
+  assert.ok(tokenDraft);
+  assert.ok(nftDraft);
+  assert.equal(continueActionDraft(tokenDraft, "start it"), null);
+  assert.equal(continueActionDraft(nftDraft, "go ahead"), null);
+});
+
 test("a standalone supply does not also populate decimals", () => {
   let draft = continueTokenDraft("Eighteen Token");
   draft = continueTokenDraft("EGTN", draft);
