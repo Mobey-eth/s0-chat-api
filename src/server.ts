@@ -21,6 +21,7 @@ const app = Fastify({
 
 await app.register(cors, {
   origin: config.corsOrigin === "*" ? true : config.corsOrigin,
+  credentials: true,
 });
 await app.register(multipart, {
   limits: {

@@ -1,20 +1,25 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { MultipartFields } from "@fastify/multipart";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getAddress, type Hex } from "viem";
 import { z } from "zod";
 import { config } from "../config.js";
 import {
-  buildCreatorAdminAuthorizationMessage,
-  verifyCreatorAdminAuthorization,
+  buildCreatorAdminSessionMessage,
+  verifyCreatorAdminSessionAuthorization,
   verifyCreatorApplicationAuthorization,
   type CreatorApplicationType,
 } from "../creator-auth.js";
 import {
+  consumeCreatorAdminChallenge,
+  createCreatorAdminChallenge,
   getCreatorAccess,
+  getCreatorAdminChallenge,
+  getCreatorAdminSession,
   getCreatorApplicationImage,
   listCreatorApplications,
   markCreatorApplicationNotification,
+  revokeCreatorAdminSession,
   setCreatorApproval,
   takeRateLimit,
   upsertCreatorApplication,
@@ -27,6 +32,9 @@ const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const SIGNATURE_RE = /^0x[a-fA-F0-9]{130}$/;
 const HASH_RE = /^0x[a-fA-F0-9]{64}$/;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const CREATOR_ADMIN_COOKIE = "stage0_creator_admin_session";
+const ADMIN_CHALLENGE_TTL_MS = 5 * 60 * 1_000;
+const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
 
 const optionalText = (max: number) => z.string().trim().max(max).transform((value) => value || null);
 const teamMemberSchema = z.object({
@@ -96,8 +104,17 @@ const adminListQuerySchema = z.object({
   chainId: z.coerce.number().int().positive().optional(),
   status: z.enum(["pending", "approved", "rejected"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+const adminSessionChallengeQuerySchema = z.object({
+  chainId: z.coerce.number().int().positive().optional(),
   address: z.string().regex(ADDRESS_RE),
-  timestamp: z.coerce.number().int().positive(),
+});
+
+const adminSessionBodySchema = z.object({
+  chainId: z.coerce.number().int().positive(),
+  address: z.string().regex(ADDRESS_RE),
+  challengeId: z.string().uuid(),
   signature: z.string().regex(SIGNATURE_RE),
 });
 
@@ -108,12 +125,44 @@ const approvalBodySchema = z.object({
   approved: z.boolean(),
   applicationId: z.string().uuid().nullable().optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
-  auth: z.object({
-    address: z.string().regex(ADDRESS_RE),
-    timestamp: z.coerce.number().int().positive(),
-    signature: z.string().regex(SIGNATURE_RE),
-  }),
 });
+
+function creatorAdminCookie(request: FastifyRequest) {
+  const header = request.headers.cookie;
+  if (!header) return null;
+  for (const entry of header.split(";")) {
+    const separator = entry.indexOf("=");
+    if (separator < 0 || entry.slice(0, separator).trim() !== CREATOR_ADMIN_COOKIE) continue;
+    try {
+      return decodeURIComponent(entry.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function creatorAdminCookieHeader(token: string, maxAgeSeconds: number) {
+  const secure = config.nodeEnv === "production" ? "; Secure" : "";
+  return `${CREATOR_ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=/api/admin/creator; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}${secure}`;
+}
+
+function creatorAdminTokenHash(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+async function requireCreatorAdminSession(request: FastifyRequest, chainId: number) {
+  const token = creatorAdminCookie(request);
+  if (!token) return null;
+  const session = await getCreatorAdminSession(creatorAdminTokenHash(token));
+  if (!session) return null;
+  if (session.chainId !== chainId || session.adminAddress !== config.creatorAdminAddress) return null;
+  return session;
+}
+
+function clearCreatorAdminCookie(reply: FastifyReply) {
+  reply.header("set-cookie", creatorAdminCookieHeader("", 0));
+}
 
 function getFieldValue(fields: MultipartFields, key: string): string {
   const field = fields[key];
@@ -312,22 +361,104 @@ export async function registerCreatorApplicationRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/admin/creator-session/challenge", async (request, reply) => {
+    const parsed = adminSessionChallengeQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_admin_session_request" });
+    const chainId = parsed.data.chainId ?? config.riseChainId;
+    if (chainId !== config.riseChainId) return reply.code(400).send({ error: "unsupported_chain" });
+
+    const adminAddress = getAddress(parsed.data.address);
+    if (adminAddress.toLowerCase() !== config.creatorAdminAddress) {
+      return reply.code(403).send({ error: "creator_admin_required" });
+    }
+
+    const challenge = {
+      id: randomUUID(),
+      chainId,
+      adminAddress: adminAddress.toLowerCase(),
+      nonce: `0x${randomBytes(32).toString("hex")}`,
+      expiresAt: new Date(Date.now() + ADMIN_CHALLENGE_TTL_MS).toISOString(),
+    };
+    await createCreatorAdminChallenge(challenge);
+    return reply.header("cache-control", "no-store").send({
+      challenge: {
+        id: challenge.id,
+        chainId,
+        address: adminAddress,
+        expiresAt: challenge.expiresAt,
+        message: buildCreatorAdminSessionMessage({
+          chainId,
+          adminAddress: challenge.adminAddress,
+          challengeId: challenge.id,
+          nonce: challenge.nonce,
+          expiresAt: challenge.expiresAt,
+        }),
+      },
+    });
+  });
+
+  app.post("/api/admin/creator-session", async (request, reply) => {
+    const parsed = adminSessionBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_admin_session_request" });
+    if (parsed.data.chainId !== config.riseChainId) {
+      return reply.code(400).send({ error: "unsupported_chain" });
+    }
+
+    const adminAddress = getAddress(parsed.data.address);
+    const challenge = await getCreatorAdminChallenge(parsed.data.challengeId);
+    if (
+      !challenge
+      || challenge.chainId !== parsed.data.chainId
+      || challenge.adminAddress !== adminAddress.toLowerCase()
+    ) {
+      return reply.code(401).send({ error: "invalid_or_expired_admin_challenge" });
+    }
+
+    const authorized = await verifyCreatorAdminSessionAuthorization({
+      chainId: challenge.chainId,
+      adminAddress,
+      challengeId: challenge.id,
+      nonce: challenge.nonce,
+      expiresAt: challenge.expiresAt,
+      signature: parsed.data.signature as Hex,
+    });
+    if (!authorized) return reply.code(401).send({ error: "invalid_admin_authorization" });
+
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + ADMIN_SESSION_TTL_MS).toISOString();
+    const created = await consumeCreatorAdminChallenge({
+      challengeId: challenge.id,
+      chainId: challenge.chainId,
+      adminAddress,
+      tokenHash: creatorAdminTokenHash(token),
+      sessionExpiresAt: expiresAt,
+    });
+    if (!created) return reply.code(401).send({ error: "invalid_or_expired_admin_challenge" });
+
+    return reply
+      .header("set-cookie", creatorAdminCookieHeader(token, Math.floor(ADMIN_SESSION_TTL_MS / 1_000)))
+      .header("cache-control", "no-store")
+      .send({ ok: true, expiresAt });
+  });
+
+  app.delete("/api/admin/creator-session", async (request, reply) => {
+    const token = creatorAdminCookie(request);
+    if (token) await revokeCreatorAdminSession(creatorAdminTokenHash(token));
+    clearCreatorAdminCookie(reply);
+    return reply.header("cache-control", "no-store").send({ ok: true });
+  });
+
   app.get("/api/admin/creator-applications", async (request, reply) => {
     const parsed = adminListQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_admin_request" });
     const chainId = parsed.data.chainId ?? config.riseChainId;
     if (chainId !== config.riseChainId) return reply.code(400).send({ error: "unsupported_chain" });
 
-    const payload = { chainId, status: parsed.data.status ?? null, limit: parsed.data.limit ?? 100 };
-    const authorized = await verifyCreatorAdminAuthorization({
-      action: "list_creator_applications",
-      chainId,
-      timestamp: parsed.data.timestamp,
-      address: parsed.data.address,
-      signature: parsed.data.signature as Hex,
-      payload,
-    });
-    if (!authorized) return reply.code(401).send({ error: "invalid_admin_authorization" });
+    const session = await requireCreatorAdminSession(request, chainId);
+    if (!session) {
+      clearCreatorAdminCookie(reply);
+      return reply.code(401).send({ error: "creator_admin_session_required" });
+    }
 
     const applications = await listCreatorApplications({
       chainId,
@@ -345,36 +476,22 @@ export async function registerCreatorApplicationRoutes(app: FastifyInstance) {
     const chainId = parsed.data.chainId ?? config.riseChainId;
     if (chainId !== config.riseChainId) return reply.code(400).send({ error: "unsupported_chain" });
 
-    const walletAddress = getAddress(parsed.data.walletAddress);
-    const payload = {
-      chainId,
-      applicationType: parsed.data.applicationType,
-      walletAddress: walletAddress.toLowerCase(),
-      approved: parsed.data.approved,
-      applicationId: parsed.data.applicationId ?? null,
-      notes: parsed.data.notes ?? null,
-    };
-    const authorized = await verifyCreatorAdminAuthorization({
-      action: "set_creator_approval",
-      chainId,
-      timestamp: parsed.data.auth.timestamp,
-      address: parsed.data.auth.address,
-      signature: parsed.data.auth.signature as Hex,
-      payload,
-    });
-    if (!authorized) return reply.code(401).send({ error: "invalid_admin_authorization" });
+    const session = await requireCreatorAdminSession(request, chainId);
+    if (!session) {
+      clearCreatorAdminCookie(reply);
+      return reply.code(401).send({ error: "creator_admin_session_required" });
+    }
 
+    const walletAddress = getAddress(parsed.data.walletAddress);
     const access = await setCreatorApproval({
       chainId,
       applicationType: parsed.data.applicationType,
       walletAddress,
       approved: parsed.data.approved,
-      approvedBy: parsed.data.auth.address,
+      approvedBy: session.adminAddress,
       applicationId: parsed.data.applicationId,
       notes: parsed.data.notes,
     });
     return reply.send({ ok: true, walletAddress, access });
   });
 }
-
-export { buildCreatorAdminAuthorizationMessage };

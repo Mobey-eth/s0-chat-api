@@ -1154,6 +1154,137 @@ export async function markCreatorApplicationNotification(input: {
   );
 }
 
+export type CreatorAdminChallenge = {
+  id: string;
+  chainId: number;
+  adminAddress: string;
+  nonce: string;
+  expiresAt: string;
+};
+
+export async function createCreatorAdminChallenge(input: CreatorAdminChallenge) {
+  await pool.query(
+    `
+      insert into senna.creator_admin_challenges (
+        id, chain_id, admin_address, nonce, expires_at
+      ) values ($1, $2, lower($3), lower($4), $5)
+    `,
+    [input.id, input.chainId, input.adminAddress, input.nonce, input.expiresAt],
+  );
+
+  await pool.query(
+    `
+      delete from senna.creator_admin_challenges
+      where expires_at <= now() or used_at < now() - interval '1 hour'
+    `,
+  );
+}
+
+export async function getCreatorAdminChallenge(id: string): Promise<CreatorAdminChallenge | null> {
+  const result = await pool.query<{
+    id: string;
+    chain_id: number;
+    admin_address: string;
+    nonce: string;
+    expires_at: Date;
+  }>(
+    `
+      select id, chain_id, admin_address, nonce, expires_at
+      from senna.creator_admin_challenges
+      where id = $1 and used_at is null and expires_at > now()
+    `,
+    [id],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    chainId: row.chain_id,
+    adminAddress: row.admin_address,
+    nonce: row.nonce,
+    expiresAt: new Date(row.expires_at).toISOString(),
+  };
+}
+
+export async function consumeCreatorAdminChallenge(input: {
+  challengeId: string;
+  chainId: number;
+  adminAddress: string;
+  tokenHash: string;
+  sessionExpiresAt: string;
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const consumed = await client.query(
+      `
+        update senna.creator_admin_challenges
+        set used_at = now()
+        where id = $1
+          and chain_id = $2
+          and admin_address = lower($3)
+          and used_at is null
+          and expires_at > now()
+        returning id
+      `,
+      [input.challengeId, input.chainId, input.adminAddress],
+    );
+    if (consumed.rowCount !== 1) {
+      await client.query("rollback");
+      return false;
+    }
+
+    await client.query(
+      `
+        insert into senna.creator_admin_sessions (
+          token_hash, chain_id, admin_address, expires_at
+        ) values ($1, $2, lower($3), $4)
+      `,
+      [input.tokenHash, input.chainId, input.adminAddress, input.sessionExpiresAt],
+    );
+    await client.query(
+      `delete from senna.creator_admin_sessions where expires_at <= now()`,
+    );
+    await client.query("commit");
+    return true;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getCreatorAdminSession(tokenHash: string) {
+  const result = await pool.query<{
+    chain_id: number;
+    admin_address: string;
+    expires_at: Date;
+  }>(
+    `
+      update senna.creator_admin_sessions
+      set last_used_at = now()
+      where token_hash = $1 and expires_at > now()
+      returning chain_id, admin_address, expires_at
+    `,
+    [tokenHash],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    chainId: row.chain_id,
+    adminAddress: row.admin_address,
+    expiresAt: new Date(row.expires_at).toISOString(),
+  };
+}
+
+export async function revokeCreatorAdminSession(tokenHash: string) {
+  await pool.query(
+    `delete from senna.creator_admin_sessions where token_hash = $1`,
+    [tokenHash],
+  );
+}
+
 export async function getHealthCounts() {
   const [sources, chunks] = await Promise.all([
     pool.query<{ count: string }>(`select count(*)::text as count from senna.doc_sources`),

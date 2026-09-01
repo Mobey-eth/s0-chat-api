@@ -4,7 +4,6 @@ import { config } from "./config.js";
 const SIGNATURE_MAX_AGE_MS = 10 * 60 * 1_000;
 
 export type CreatorApplicationType = "nft" | "presale";
-export type CreatorAdminAction = "list_creator_applications" | "set_creator_approval";
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -36,18 +35,22 @@ export function buildCreatorApplicationAuthorizationMessage(input: {
   ].join("\n");
 }
 
-export function buildCreatorAdminAuthorizationMessage(input: {
-  action: CreatorAdminAction;
+export function buildCreatorAdminSessionMessage(input: {
   chainId: number;
-  timestamp: number;
-  payload: unknown;
+  adminAddress: string;
+  challengeId: string;
+  nonce: string;
+  expiresAt: string;
 }) {
   return [
-    "Stage0 creator access administration",
+    "Stage0 creator admin session",
     `Network: ${config.riseNetworkName} (${input.chainId})`,
-    `Action: ${input.action}`,
-    `Timestamp: ${input.timestamp}`,
-    `Payload: ${stableJson(input.payload)}`,
+    `Admin: ${input.adminAddress.toLowerCase()}`,
+    `Challenge: ${input.challengeId}`,
+    `Nonce: ${input.nonce.toLowerCase()}`,
+    `Expires: ${input.expiresAt}`,
+    "Purpose: Review and manage private creator applications",
+    "This is an off-chain signature. It does not submit a transaction or cost gas.",
   ].join("\n");
 }
 
@@ -74,19 +77,17 @@ export async function verifyCreatorApplicationAuthorization(input: {
   });
 }
 
-export async function verifyCreatorAdminAuthorization(input: {
-  action: CreatorAdminAction;
+export async function verifyCreatorAdminSessionAuthorization(input: {
   chainId: number;
-  timestamp: number;
-  address: string;
+  adminAddress: string;
+  challengeId: string;
+  nonce: string;
+  expiresAt: string;
   signature: Hex;
-  payload: unknown;
 }) {
-  if (!isFreshTimestamp(input.timestamp)) return false;
-
   let address: `0x${string}`;
   try {
-    address = getAddress(input.address);
+    address = getAddress(input.adminAddress);
   } catch {
     return false;
   }
@@ -95,7 +96,7 @@ export async function verifyCreatorAdminAuthorization(input: {
 
   return verifyMessage({
     address,
-    message: buildCreatorAdminAuthorizationMessage(input),
+    message: buildCreatorAdminSessionMessage({ ...input, adminAddress: address }),
     signature: input.signature,
   });
 }
