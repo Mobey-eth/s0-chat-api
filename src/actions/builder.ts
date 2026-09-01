@@ -279,6 +279,25 @@ function parseTokenName(message: string) {
   return parseNameAfterKind(message, "token");
 }
 
+function parseDirectTokenNameAnswer(message: string) {
+  const quoted = parseQuotedValue(message);
+  const trimmed = (quoted || message.trim()).replace(/\s+/g, " ").trim();
+  if (
+    trimmed.length < 2 ||
+    trimmed.length > 64 ||
+    !/^[A-Za-z0-9][A-Za-z0-9 &'._-]*$/.test(trimmed) ||
+    /^\d+$/.test(trimmed) ||
+    /^0x[a-fA-F0-9]{40}$/.test(trimmed) ||
+    /^(?:yes|no|cancel|stop|skip|default|okay|ok)$/i.test(trimmed) ||
+    /\b(?:symbol|ticker|supply|amount|decimals?|token\s*type|mintable|burnable|taxable|non[-\s]?mintable|fixed\s+supply)\b/i.test(trimmed) ||
+    /^(?:create|deploy|make|launch)(?:\s+(?:a|an|new))?\s+(?:erc[-\s]?20\s+)?token$/i.test(trimmed)
+  ) {
+    return "";
+  }
+
+  return trimmed;
+}
+
 function parseCollectionName(message: string) {
   return parseNameAfterKind(message, "nft");
 }
@@ -288,15 +307,22 @@ function parseTokenSymbol(message: string) {
     message.match(/(?:symbol|ticker)(?:\s+is)?\s+"?([A-Z0-9]{2,10})"?/i)?.[1]?.trim() ??
     message.match(/^\s*([A-Z0-9]{2,10})\s*$/)?.[1]?.trim() ??
     ""
-  );
+  ).toUpperCase();
 }
 
-function parseSupply(message: string) {
+function parseExplicitSupply(message: string) {
   const explicitMatch = message.match(/(?:supply|amount|mint|total|max supply)(?:\s+of)?\s+([\d,]+(?:\.\d+)?(?:\s*[kmbt]\b|\s+(?:thousand|million|billion|trillion)s?\b)?)/i)?.[1];
   if (explicitMatch) {
     const result = parseQuantityFromText(explicitMatch);
     if (result) return result;
   }
+
+  return "";
+}
+
+function parseSupply(message: string) {
+  const explicit = parseExplicitSupply(message);
+  if (explicit) return explicit;
 
   return parseQuantityFromText(message);
 }
@@ -320,18 +346,25 @@ function parseNftStandard(message: string) {
   return "";
 }
 
-function parseDecimals(message: string) {
-  const standalone = message.trim().match(/^(\d{1,2})$/);
-  if (standalone) {
-    const n = Number.parseInt(standalone[1], 10);
-    if (Number.isFinite(n) && n >= 0 && n <= 77) return String(n);
-  }
-
+function parseExplicitDecimals(message: string) {
   const explicit =
     message.match(/(?:^|\s)(\d{1,2})\s*decimals?\b/i)?.[1] ??
     message.match(/\bdecimals?\s*(?:is\s+|of\s+|=\s*|:\s*)?(\d{1,2})\b/i)?.[1];
   if (explicit) {
     const n = Number.parseInt(explicit, 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 77) return String(n);
+  }
+
+  return "";
+}
+
+function parseDecimals(message: string) {
+  const explicit = parseExplicitDecimals(message);
+  if (explicit) return explicit;
+
+  const standalone = message.trim().match(/^(\d{1,2})$/);
+  if (standalone) {
+    const n = Number.parseInt(standalone[1], 10);
     if (Number.isFinite(n) && n >= 0 && n <= 77) return String(n);
   }
 
@@ -794,9 +827,18 @@ export function buildOpenRoute(route: string, summary?: string, options?: { requ
 // --- Order-agnostic merge helpers ---------------------------------------------
 
 function mergeCreateToken(existing: ActionDraft, message: string) {
-  const nextName = existing.prefill.name || parseTokenName(message);
-  const nextSymbol = existing.prefill.symbol || parseTokenSymbol(message);
-  const nextSupply = existing.prefill.initialSupply || parseSupply(message);
+  const firstMissing = existing.missingFields[0];
+  const explicitName = parseLabeledTextField(message, ["token\\s+name", "name"]) || parseNamedPhrase(message);
+  const directName = firstMissing === "name" ? parseDirectTokenNameAnswer(message) : "";
+  const nextName = existing.prefill.name || explicitName || directName;
+
+  const explicitSymbol = parseLabeledSymbolField(message);
+  const directSymbol = firstMissing === "symbol" ? parseTokenSymbol(message) : "";
+  const nextSymbol = existing.prefill.symbol || explicitSymbol || directSymbol;
+
+  const explicitSupply = parseExplicitSupply(message);
+  const directSupply = firstMissing === "initialSupply" ? parseQuantityFromText(message) : "";
+  const nextSupply = existing.prefill.initialSupply || explicitSupply || directSupply;
 
   const tokenTypeStillMissing = existing.missingFields.includes("tokenType");
   let nextTokenType = tokenTypeStillMissing ? "" : existing.prefill.tokenType;
@@ -809,7 +851,7 @@ function mergeCreateToken(existing: ActionDraft, message: string) {
   let nextDecimals = existing.prefill.decimals && existing.prefill.decimals !== "18" ? existing.prefill.decimals : "";
   if (!existing.missingFields.includes("decimals") && existing.prefill.decimals) nextDecimals = existing.prefill.decimals;
   if (!nextDecimals || existing.missingFields.includes("decimals")) {
-    const parsed = parseDecimals(message);
+    const parsed = parseExplicitDecimals(message) || (firstMissing === "decimals" ? parseDecimals(message) : "");
     if (parsed) nextDecimals = parsed;
     else if (isSkipResponse(message) && existing.missingFields[0] === "decimals") nextDecimals = "18";
   }
@@ -1034,13 +1076,10 @@ export function canContinueActionDraft(existing: ActionDraft, message: string) {
   }
 
   if (existing.actionType === "create_token") {
+    const merged = mergeCreateToken(existing, message);
     return (
-      Boolean(parseTokenName(message)) ||
-      Boolean(parseTokenSymbol(message)) ||
-      Boolean(parseSupply(message)) ||
-      Boolean(parseTokenType(message)) ||
-      Boolean(parseDecimals(message)) ||
-      isSkipResponse(message)
+      JSON.stringify(merged.prefill) !== JSON.stringify(existing.prefill) ||
+      JSON.stringify(merged.missingFields) !== JSON.stringify(existing.missingFields)
     );
   }
 
@@ -1105,7 +1144,11 @@ export function getActionFollowUp(draft: ActionDraft) {
 
   if (draft.actionType === "create_token") {
     if (draft.missingFields.includes("name")) return "What should the token be called?";
-    if (draft.missingFields.includes("symbol")) return "What ticker symbol? (2-10 chars, like RISE.)";
+    if (draft.missingFields.includes("symbol")) {
+      return draft.prefill.name
+        ? `What ticker should "${draft.prefill.name}" use?`
+        : "What ticker symbol should the token use?";
+    }
     if (draft.missingFields.includes("tokenType")) {
       return [
         "What type of token?",
@@ -1269,6 +1312,7 @@ export function suggestForDraftField(draft: ActionDraft): string[] {
   if (!first) return [];
 
   if (draft.actionType === "create_token") {
+    if (first === "symbol") return suggestTokenSymbols(draft.prefill.name);
     if (first === "tokenType") return ["Plain", "Mintable", "Burnable"];
     if (first === "decimals") return ["18", "9", "6"];
     if (first === "initialSupply") return ["1,000,000", "100,000,000", "1,000,000,000"];
@@ -1283,4 +1327,20 @@ export function suggestForDraftField(draft: ActionDraft): string[] {
   }
 
   return [];
+}
+
+function suggestTokenSymbols(name: string | undefined) {
+  const words = (name?.toUpperCase().match(/[A-Z0-9]+/g) ?? []).filter(Boolean);
+  if (words.length === 0) return [];
+
+  const firstWord = words[0];
+  const lastWord = words.at(-1) ?? firstWord;
+  const consonantTicker = `${firstWord[0]}${firstWord.slice(1).replace(/[AEIOU]/g, "")}`;
+  const joinedTicker = words.length > 1 ? `${firstWord[0]}${lastWord.slice(0, 3)}` : "";
+  const candidates = [consonantTicker, joinedTicker, firstWord.slice(0, 6), firstWord.slice(0, 4)];
+
+  return [...new Set(candidates)]
+    .map((candidate) => candidate.slice(0, 10))
+    .filter((candidate) => /^[A-Z][A-Z0-9]{1,9}$/.test(candidate))
+    .slice(0, 3);
 }
