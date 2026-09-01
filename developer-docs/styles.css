@@ -63,7 +63,7 @@ nav a:hover, footer a:hover { color: var(--green); }
 .eyebrow { display: flex; align-items: center; gap: 9px; }
 .eyebrow img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
 h1 { max-width: 800px; margin: 24px 0; font-size: clamp(62px, 10vw, 124px); line-height: .84; letter-spacing: -.075em; }
-h1 em { color: var(--green); font-family: Georgia, serif; font-weight: 400; }
+h1 em { color: var(--green); font-family: inherit; font-style: normal; font-weight: inherit; }
 .hero > p { max-width: 660px; color: #b7b7b1; font-size: clamp(17px, 2vw, 21px); }
 .hero code { color: var(--ink); }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
