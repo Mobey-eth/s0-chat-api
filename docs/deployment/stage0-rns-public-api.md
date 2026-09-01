@@ -39,6 +39,7 @@ Cloudflare -> Nginx Proxy Manager -> stage0-developer-docs:80
 - The reader role has `SELECT` on the `stage0_rns` mirror schema and no `INSERT`, `UPDATE`, or `DELETE` privileges.
 - Writer and reader credentials live in separate Docker volumes and are generated on the VPS, not committed or copied into application environment files.
 - The public API container is read-only, drops Linux capabilities, has resource limits, and does not receive chat, signer, Slack, Resend, upload, or LLM credentials.
+- Forwarded client IPs are trusted only from the private proxy network and Cloudflare's published address ranges, preventing direct clients from bypassing per-IP limits with forged headers.
 - The docs container is a static read-only Nginx service.
 
 ## Mirror behavior
