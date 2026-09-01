@@ -56,13 +56,13 @@
         </div>
         <div class="code-card">
           <div class="code-bar"><span>Terminal</span><button type="button" class="copy" data-copy="quickstart-code">Copy</button></div>
-          <pre id="quickstart-code"><code>curl https://rns.stage0.xyz/v1/resolve/example.rise</code></pre>
+          <pre id="quickstart-code"><code>curl https://rns.stage0.xyz/v1/resolve/mrbeast.rise</code></pre>
         </div>
         <div class="response-card">
           <span class="status">200</span>
           <pre><code>{
   "chainId": 4153,
-  "name": "example.rise",
+  "name": "mrbeast.rise",
   "address": "0x…",
   "owner": "0x…",
   "expiry": "1798761600",
@@ -105,7 +105,7 @@
         <div class="code-card sample active" data-panel="fetch">
           <div class="code-bar"><span>REST client</span><button type="button" class="copy" data-copy="fetch-code">Copy</button></div>
           <pre id="fetch-code"><code>const response = await fetch(
-  "https://rns.stage0.xyz/v1/resolve/example.rise"
+  "https://rns.stage0.xyz/v1/resolve/mrbeast.rise"
 );
 
 if (!response.ok) throw new Error(`RNS error: ${response.status}`);
@@ -122,7 +122,7 @@ const client = createPublicClient({
   transport: http("https://rpc.risechain.com")
 });
 const registry = "0x6DDca710993C91402d52061868bE76043a4C5888";
-const node = namehash("example.rise");
+const node = namehash("mrbeast.rise");
 
 const owner = await client.readContract({
   address: registry,

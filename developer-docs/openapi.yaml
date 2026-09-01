@@ -118,7 +118,7 @@ paths:
       parameters:
         - name: name
           in: query
-          schema: { type: string, example: example.rise }
+          schema: { type: string, example: mrbeast.rise }
         - name: years
           in: query
           schema: { type: integer, minimum: 1, maximum: 10, default: 1 }
@@ -201,7 +201,7 @@ components:
       in: path
       required: true
       description: A label or fully qualified .rise name
-      schema: { type: string, example: example.rise }
+      schema: { type: string, example: mrbeast.rise }
     Address:
       name: address
       in: path
@@ -263,7 +263,7 @@ components:
       required: [chainId, name, node, address, owner, resolver, expiry, blockNumber, source]
       properties:
         chainId: { type: integer, const: 4153 }
-        name: { type: string, example: example.rise }
+        name: { type: string, example: mrbeast.rise }
         node: { $ref: '#/components/schemas/Hash' }
         address: { oneOf: [{ $ref: '#/components/schemas/Address' }, { type: 'null' }] }
         owner: { $ref: '#/components/schemas/Address' }

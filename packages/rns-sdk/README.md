@@ -6,7 +6,7 @@ Read-only utilities for `.rise` names on RISE Mainnet. The package includes a ty
 import { createStage0RnsApiClient } from "@stage0/rns";
 
 const rns = createStage0RnsApiClient();
-const result = await rns.resolveName("example.rise");
+const result = await rns.resolveName("mrbeast.rise");
 console.log(result.address);
 ```
 
@@ -21,7 +21,7 @@ const publicClient = createPublicClient({
   transport: http(),
 });
 const rns = createStage0RnsOnchainClient(publicClient);
-const result = await rns.resolveName("example.rise");
+const result = await rns.resolveName("mrbeast.rise");
 ```
 
 The initial package and API are intentionally read-only. They do not create registration quotes or transactions.
