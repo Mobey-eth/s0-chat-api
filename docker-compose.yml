@@ -18,6 +18,214 @@ services:
     networks:
       - proxy
 
+  stage0-rns-secrets:
+    image: alpine:3.21
+    container_name: stage0-rns-secrets
+    restart: "no"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        if [ ! -s /run/rns-writer/password ]; then
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /run/rns-writer/password
+        fi
+        if [ ! -s /run/rns-reader/password ]; then
+          head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /run/rns-reader/password
+        fi
+        chmod 0444 /run/rns-writer/password /run/rns-reader/password
+    volumes:
+      - stage0-rns-writer-secret:/run/rns-writer
+      - stage0-rns-reader-secret:/run/rns-reader
+    network_mode: none
+
+  stage0-rns-postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.rns-postgres
+    container_name: stage0-rns-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: stage0_rns
+      POSTGRES_USER: stage0_rns_mirror
+      POSTGRES_PASSWORD_FILE: /run/rns-writer/password
+    volumes:
+      - stage0-rns-postgres-data:/var/lib/postgresql/data
+      - stage0-rns-writer-secret:/run/rns-writer:ro
+    depends_on:
+      stage0-rns-secrets:
+        condition: service_completed_successfully
+    mem_limit: 512m
+    cpus: 0.75
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stage0_rns_mirror -d stage0_rns"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - stage0-rns-data
+
+  stage0-rns-reader-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.rns-postgres
+    container_name: stage0-rns-reader-init
+    restart: "no"
+    command: ["sh", "/usr/local/bin/provision-rns-reader"]
+    volumes:
+      - stage0-rns-writer-secret:/run/rns-writer:ro
+      - stage0-rns-reader-secret:/run/rns-reader:ro
+    depends_on:
+      stage0-rns-postgres:
+        condition: service_healthy
+    networks:
+      - stage0-rns-data
+
+  stage0-rns-mirror:
+    build: .
+    container_name: stage0-rns-mirror
+    restart: unless-stopped
+    user: node
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export RNS_MIRROR_DATABASE_URL="postgresql://stage0_rns_mirror:$$(cat /run/rns-writer/password)@stage0-rns-postgres:5432/stage0_rns"
+        exec node dist/rns/mirror.js
+    environment:
+      RNS_SOURCE_DATABASE_URL: ${DATABASE_URL}
+      RNS_SOURCE_DATABASE_SSL: ${DATABASE_SSL:-true}
+      RISE_CHAIN_ID: "4153"
+      RNS_MIRROR_INTERVAL_SECONDS: "30"
+    volumes:
+      - stage0-rns-writer-secret:/run/rns-writer:ro
+    depends_on:
+      stage0-rns-postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/rns-mirror-ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - stage0-rns-data
+      - stage0-rns-egress
+
+  stage0-rns-api:
+    build: .
+    container_name: stage0-rns-api
+    restart: unless-stopped
+    user: node
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export DATABASE_URL="postgresql://stage0_rns_reader:$$(cat /run/rns-reader/password)@stage0-rns-postgres:5432/stage0_rns"
+        exec node dist/public-rns-server.js
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      DATABASE_SSL: "false"
+      DATABASE_READ_ONLY: "true"
+      DATABASE_POOL_MAX: "3"
+      PGOPTIONS: "-c default_transaction_read_only=on"
+      RISE_RPC_URL: ${RISE_RPC_URL:-https://rpc.risechain.com}
+      RISE_CHAIN_ID: "4153"
+      RISE_EXPLORER_URL: ${RISE_EXPLORER_URL:-https://explorer.risechain.com}
+      RNS_REGISTRY_ADDRESS: ${RNS_REGISTRY_ADDRESS:-0x6DDca710993C91402d52061868bE76043a4C5888}
+      RNS_RESOLVER_ADDRESS: ${RNS_RESOLVER_ADDRESS:-0x36D6383774631565AB0D8F3710748610631A675d}
+      RNS_REGISTRAR_ADDRESS: ${RNS_REGISTRAR_ADDRESS:-0xbCA437a93C2E7396a68Ce49BE224F65eE3CFd6Db}
+      RNS_AUCTION_HOUSE_ADDRESS: ${RNS_AUCTION_HOUSE_ADDRESS:-0x0E37994c19980A792B83A106cE03a9b8a9cD40Fc}
+      RNS_MARKETPLACE_ADDRESS: ${RNS_MARKETPLACE_ADDRESS:-0x323A04F474f80225DE60C1Af13a672796aFA6622}
+      RNS_REGISTRY_START_BLOCK: ${RNS_REGISTRY_START_BLOCK:-20079518}
+      RNS_RESOLVER_START_BLOCK: ${RNS_RESOLVER_START_BLOCK:-20079521}
+      RNS_REGISTRAR_START_BLOCK: ${RNS_REGISTRAR_START_BLOCK:-20079523}
+      RNS_AUCTION_HOUSE_START_BLOCK: ${RNS_AUCTION_HOUSE_START_BLOCK:-20079526}
+      RNS_MARKETPLACE_START_BLOCK: ${RNS_MARKETPLACE_START_BLOCK:-20079528}
+      RNS_SYNC_INTERVAL_SECONDS: ${RNS_SYNC_INTERVAL_SECONDS:-300}
+      RNS_PRICE_SOURCE_URL: ${RNS_PRICE_SOURCE_URL:-https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd}
+      RNS_PRICE_SOURCE_REFRESH_INTERVAL_MS: ${RNS_PRICE_SOURCE_REFRESH_INTERVAL_MS:-60000}
+      RNS_PUBLIC_API_RATE_LIMIT_WINDOW_SECONDS: ${RNS_PUBLIC_API_RATE_LIMIT_WINDOW_SECONDS:-60}
+      RNS_PUBLIC_API_RATE_LIMIT_MAX_REQUESTS: ${RNS_PUBLIC_API_RATE_LIMIT_MAX_REQUESTS:-60}
+    volumes:
+      - stage0-rns-reader-secret:/run/rns-reader:ro
+    depends_on:
+      stage0-rns-mirror:
+        condition: service_healthy
+      stage0-rns-reader-init:
+        condition: service_completed_successfully
+    expose:
+      - "3001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 384m
+    cpus: 0.75
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - proxy
+      - stage0-rns-data
+
+  stage0-developer-docs:
+    build:
+      context: .
+      dockerfile: Dockerfile.docs
+    container_name: stage0-developer-docs
+    restart: unless-stopped
+    expose:
+      - "80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    mem_limit: 64m
+    cpus: 0.25
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - proxy
+
 networks:
   proxy:
     external: true
+  stage0-rns-data:
+    internal: true
+  stage0-rns-egress:
+    driver: bridge
+
+volumes:
+  stage0-rns-postgres-data:
+  stage0-rns-writer-secret:
+  stage0-rns-reader-secret:

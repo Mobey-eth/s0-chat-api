@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Integrate .rise names across RISE Mainnet with the Stage0 RNS API and onchain contracts.">
+    <title>Stage0 RNS Developers</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="Stage0 RNS developer home">
+        <span class="brand-mark">S0</span>
+        <span>Stage0 <b>Developers</b></span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#quickstart">Quickstart</a>
+        <a href="#endpoints">API</a>
+        <a href="#onchain">Onchain</a>
+        <a href="/openapi.yaml">OpenAPI</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero shell">
+        <div class="eyebrow"><span></span> RISE Mainnet · Chain 4153</div>
+        <h1>RISE names,<br><em>everywhere.</em></h1>
+        <p>
+          Resolve <code>.rise</code> names, display wallet identities, and read the RNS marketplace
+          through a small, read-only API—or integrate the contracts directly.
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="#quickstart">Start integrating</a>
+          <a class="button secondary" href="/openapi.yaml">OpenAPI specification</a>
+        </div>
+        <dl class="facts">
+          <div><dt>API</dt><dd>https://rns.stage0.xyz/v1</dd></div>
+          <div><dt>Network</dt><dd>RISE Mainnet</dd></div>
+          <div><dt>Access</dt><dd>Public · GET only</dd></div>
+        </dl>
+      </section>
+
+      <section class="section shell" id="quickstart">
+        <div class="section-heading">
+          <span>01</span>
+          <div><h2>One request to resolve a name</h2><p>No API key is required for standard public reads.</p></div>
+        </div>
+        <div class="code-card">
+          <div class="code-bar"><span>Terminal</span><button type="button" class="copy" data-copy="quickstart-code">Copy</button></div>
+          <pre id="quickstart-code"><code>curl https://rns.stage0.xyz/v1/resolve/example.rise</code></pre>
+        </div>
+        <div class="response-card">
+          <span class="status">200</span>
+          <pre><code>{
+  "chainId": 4153,
+  "name": "example.rise",
+  "address": "0x…",
+  "owner": "0x…",
+  "expiry": "1798761600",
+  "source": "onchain"
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="section shell" id="endpoints">
+        <div class="section-heading">
+          <span>02</span>
+          <div><h2>Version 1 endpoints</h2><p>Stable JSON responses for resolution and indexed RNS discovery.</p></div>
+        </div>
+        <div class="endpoint-list">
+          <article><b>GET</b><code>/v1/resolve/{name}</code><p>Resolve a registered name directly from RISE Mainnet.</p></article>
+          <article><b>GET</b><code>/v1/reverse/{address}</code><p>Find the indexed primary name for an address.</p></article>
+          <article><b>GET</b><code>/v1/names/{name}</code><p>Read onchain state together with indexed registration metadata.</p></article>
+          <article><b>GET</b><code>/v1/addresses/{address}/names</code><p>List active names owned by an address, including marketplace custody.</p></article>
+          <article><b>GET</b><code>/v1/availability/{name}</code><p>Check availability and the registrar's effective policy.</p></article>
+          <article><b>GET</b><code>/v1/pricing?name=…&amp;years=1</code><p>Estimate public registration pricing without creating a signed quote.</p></article>
+          <article><b>GET</b><code>/v1/auctions</code><p>List indexed primary RNS auctions.</p></article>
+          <article><b>GET</b><code>/v1/marketplace/listings</code><p>List secondary-market fixed-price listings.</p></article>
+          <article><b>GET</b><code>/v1/marketplace/auctions</code><p>List secondary-market auctions.</p></article>
+          <article><b>GET</b><code>/v1/marketplace/activity</code><p>Read recent indexed marketplace events.</p></article>
+          <article><b>GET</b><code>/v1/network</code><p>Read canonical mainnet configuration and contract addresses.</p></article>
+          <article><b>GET</b><code>/v1/health</code><p>Check service and indexer freshness.</p></article>
+        </div>
+      </section>
+
+      <section class="section shell" id="samples">
+        <div class="section-heading">
+          <span>03</span>
+          <div><h2>Use the stack you already have</h2><p>REST for convenience, direct contract reads for maximum independence.</p></div>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Integration examples">
+          <button type="button" class="tab active" data-tab="fetch" role="tab">TypeScript</button>
+          <button type="button" class="tab" data-tab="viem" role="tab">Viem</button>
+          <button type="button" class="tab" data-tab="wagmi" role="tab">React / Wagmi</button>
+        </div>
+        <div class="code-card sample active" data-panel="fetch">
+          <div class="code-bar"><span>REST client</span><button type="button" class="copy" data-copy="fetch-code">Copy</button></div>
+          <pre id="fetch-code"><code>const response = await fetch(
+  "https://rns.stage0.xyz/v1/resolve/example.rise"
+);
+
+if (!response.ok) throw new Error(`RNS error: ${response.status}`);
+
+const { address, expiry } = await response.json();
+console.log({ address, expiry });</code></pre>
+        </div>
+        <div class="code-card sample" data-panel="viem">
+          <div class="code-bar"><span>Direct onchain resolution</span><button type="button" class="copy" data-copy="viem-code">Copy</button></div>
+          <pre id="viem-code"><code>import { createPublicClient, http, parseAbi } from "viem";
+import { namehash } from "viem/ens";
+
+const client = createPublicClient({
+  transport: http("https://rpc.risechain.com")
+});
+const registry = "0x6DDca710993C91402d52061868bE76043a4C5888";
+const node = namehash("example.rise");
+
+const owner = await client.readContract({
+  address: registry,
+  abi: parseAbi(["function owner(bytes32) view returns (address)"]),
+  functionName: "owner",
+  args: [node]
+});</code></pre>
+        </div>
+        <div class="code-card sample" data-panel="wagmi">
+          <div class="code-bar"><span>React component</span><button type="button" class="copy" data-copy="wagmi-code">Copy</button></div>
+          <pre id="wagmi-code"><code>import { useQuery } from "@tanstack/react-query";
+
+export function RiseName({ name }: { name: string }) {
+  const query = useQuery({
+    queryKey: ["rise-name", name],
+    queryFn: async () =&gt; {
+      const res = await fetch(
+        `https://rns.stage0.xyz/v1/resolve/${encodeURIComponent(name)}`
+      );
+      if (!res.ok) throw new Error("Name not found");
+      return res.json();
+    }
+  });
+
+  return &lt;span&gt;{query.data?.address ?? "Resolving…"}&lt;/span&gt;;
+}</code></pre>
+        </div>
+      </section>
+
+      <section class="section shell" id="onchain">
+        <div class="section-heading">
+          <span>04</span>
+          <div><h2>Canonical mainnet contracts</h2><p>The chain remains the source of truth.</p></div>
+        </div>
+        <table class="contract-table">
+          <caption>RNS mainnet contracts</caption>
+          <thead><tr><th>Contract</th><th>Address</th></tr></thead>
+          <tbody>
+            <tr><td>Registry</td><td><code>0x6DDca710993C91402d52061868bE76043a4C5888</code></td></tr>
+            <tr><td>Resolver</td><td><code>0x36D6383774631565AB0D8F3710748610631A675d</code></td></tr>
+            <tr><td>Registrar</td><td><code>0xbCA437a93C2E7396a68Ce49BE224F65eE3CFd6Db</code></td></tr>
+            <tr><td>Auction House</td><td><code>0x0E37994c19980A792B83A106cE03a9b8a9cD40Fc</code></td></tr>
+            <tr><td>Marketplace</td><td><code>0x323A04F474f80225DE60C1Af13a672796aFA6622</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section shell split" id="operations">
+        <article>
+          <span class="mini-label">Rate limits</span>
+          <h3>Designed for public reads</h3>
+          <p>Anonymous clients receive 60 requests per minute by default. Responses include limit, remaining, reset, and retry headers.</p>
+        </article>
+        <article>
+          <span class="mini-label">Caching</span>
+          <h3>Fast without hiding freshness</h3>
+          <p>Resolution and index responses use short public cache windows. Onchain responses include the block number; indexed responses include index metadata.</p>
+        </article>
+        <article>
+          <span class="mini-label">Safety</span>
+          <h3>Read-only by design</h3>
+          <p>Version 1 exposes GET and OPTIONS only. It cannot create quotes, sign payloads, mutate RNS state, or access Stage0 admin and Senna routes.</p>
+        </article>
+      </section>
+    </main>
+
+    <footer class="shell">
+      <span>Stage0 RNS · RISE Mainnet</span>
+      <div><a href="https://stage0.xyz">Stage0</a><a href="https://explorer.risechain.com">Explorer</a><a href="/openapi.yaml">OpenAPI</a></div>
+    </footer>
+  </body>
+</html>

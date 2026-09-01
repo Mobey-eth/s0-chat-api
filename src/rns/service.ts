@@ -2870,7 +2870,7 @@ function timedAuctionStatus(status: string, startTime: bigint, endTime: bigint) 
   return "active";
 }
 
-function serializePrimaryAuctionRecord(auction: RnsPrimaryAuctionRecord) {
+export function serializePrimaryAuctionRecord(auction: RnsPrimaryAuctionRecord) {
   return {
     chainId: auction.chainId,
     auctionId: auction.auctionId.toString(),
@@ -2896,7 +2896,7 @@ function serializePrimaryAuctionRecord(auction: RnsPrimaryAuctionRecord) {
   };
 }
 
-function serializeMarketplaceListingRecord(listing: RnsMarketplaceListingRecord) {
+export function serializeMarketplaceListingRecord(listing: RnsMarketplaceListingRecord) {
   return {
     chainId: listing.chainId,
     listingId: listing.listingId.toString(),
@@ -2916,7 +2916,7 @@ function serializeMarketplaceListingRecord(listing: RnsMarketplaceListingRecord)
   };
 }
 
-function serializeMarketplaceAuctionRecord(auction: RnsMarketplaceAuctionRecord) {
+export function serializeMarketplaceAuctionRecord(auction: RnsMarketplaceAuctionRecord) {
   return {
     chainId: auction.chainId,
     auctionId: auction.auctionId.toString(),
@@ -2943,7 +2943,7 @@ function serializeMarketplaceAuctionRecord(auction: RnsMarketplaceAuctionRecord)
   };
 }
 
-function serializeMarketplaceEventRecord(event: RnsMarketplaceEventRecord) {
+export function serializeMarketplaceEventRecord(event: RnsMarketplaceEventRecord) {
   return {
     id: event.id.toString(),
     chainId: event.chainId,

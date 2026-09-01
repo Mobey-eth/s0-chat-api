@@ -7,7 +7,7 @@ const { Pool } = pg;
 
 export const pool = new Pool({
   connectionString: config.databaseUrl,
-  max: 5,
+  max: config.databasePoolMax,
   idleTimeoutMillis: 30_000,
   ssl: config.databaseSsl ? { rejectUnauthorized: false } : undefined,
 });
@@ -31,6 +31,16 @@ export interface RetrievedDocChunk {
 
 export async function closeDb() {
   await pool.end();
+}
+
+export async function assertDatabaseAccessMode() {
+  if (!config.databaseReadOnly) return;
+  const result = await pool.query<{ default_transaction_read_only: string }>(
+    "show default_transaction_read_only",
+  );
+  if (result.rows[0]?.default_transaction_read_only !== "on") {
+    throw new Error("Public RNS database connection is not read-only");
+  }
 }
 
 export async function runMigrations() {

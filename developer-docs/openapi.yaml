@@ -1,0 +1,319 @@
+openapi: 3.1.0
+info:
+  title: Stage0 RNS API
+  version: 1.0.0
+  description: Read-only resolution and indexed discovery for .rise names on RISE Mainnet.
+  contact:
+    name: Stage0
+    url: https://stage0.xyz
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Stage0-Proprietary
+servers:
+  - url: https://rns.stage0.xyz/v1
+    description: RISE Mainnet
+tags:
+  - name: Resolution
+    description: Forward, reverse, detailed, and availability reads.
+  - name: Discovery
+    description: Indexed ownership, pricing, and primary auction data.
+  - name: Marketplace
+    description: Indexed secondary-market listings, auctions, and events.
+  - name: Service
+    description: Canonical network configuration and service health.
+security: []
+paths:
+  /resolve/{name}:
+    get:
+      tags: [Resolution]
+      summary: Resolve a .rise name
+      operationId: resolveName
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Onchain name resolution
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resolution' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /reverse/{address}:
+    get:
+      tags: [Resolution]
+      summary: Find the primary .rise name for an address
+      operationId: reverseResolve
+      parameters:
+        - $ref: '#/components/parameters/Address'
+      responses:
+        '200':
+          description: Indexed reverse resolution; primaryName is null when none is configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReverseResolution' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /names/{name}:
+    get:
+      tags: [Resolution]
+      summary: Read a complete name record
+      operationId: getName
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Onchain name state with indexed metadata when available
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NameRecord' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /addresses/{address}/names:
+    get:
+      tags: [Discovery]
+      summary: List active names owned by an address
+      operationId: listAddressNames
+      parameters:
+        - $ref: '#/components/parameters/Address'
+      responses:
+        '200':
+          description: Active wallet and marketplace-custodied names
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chainId, owner, count, names]
+                properties:
+                  chainId: { type: integer, const: 4153 }
+                  owner: { $ref: '#/components/schemas/Address' }
+                  count: { type: integer }
+                  names:
+                    type: array
+                    items: { $ref: '#/components/schemas/IndexedName' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /availability/{name}:
+    get:
+      tags: [Resolution]
+      summary: Check onchain availability and label policy
+      operationId: checkAvailability
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Current registrar state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnchainName' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /pricing:
+    get:
+      tags: [Discovery]
+      summary: Estimate registration pricing
+      description: Returns an unsigned estimate only. Version 1 does not create registration quotes.
+      operationId: getPricing
+      parameters:
+        - name: name
+          in: query
+          schema: { type: string, example: example.rise }
+        - name: years
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10, default: 1 }
+      responses:
+        '200':
+          description: ETH/USD pricing tiers and optional name estimate
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /auctions:
+    get:
+      tags: [Discovery]
+      summary: List primary RNS auctions
+      operationId: listPrimaryAuctions
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /marketplace/listings:
+    get:
+      tags: [Marketplace]
+      summary: List marketplace listings
+      operationId: listMarketplaceListings
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /marketplace/auctions:
+    get:
+      tags: [Marketplace]
+      summary: List marketplace auctions
+      operationId: listMarketplaceAuctions
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /marketplace/activity:
+    get:
+      tags: [Marketplace]
+      summary: List recent marketplace activity
+      operationId: listMarketplaceActivity
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200': { $ref: '#/components/responses/List' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /network:
+    get:
+      tags: [Service]
+      summary: Read canonical RISE Mainnet configuration
+      operationId: getNetwork
+      responses:
+        '200':
+          description: Network, contracts, and deployment blocks
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /health:
+    get:
+      tags: [Service]
+      summary: Check API and indexer health
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service status and index freshness
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '429': { $ref: '#/components/responses/RateLimited' }
+components:
+  parameters:
+    Name:
+      name: name
+      in: path
+      required: true
+      description: A label or fully qualified .rise name
+      schema: { type: string, example: example.rise }
+    Address:
+      name: address
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Address' }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+  responses:
+    BadRequest:
+      description: Invalid path or query input
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: The name is not currently registered
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Request limit exceeded
+      headers:
+        Retry-After: { schema: { type: integer } }
+        X-RateLimit-Limit: { schema: { type: integer } }
+        X-RateLimit-Remaining: { schema: { type: integer } }
+        X-RateLimit-Reset: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    List:
+      description: A bounded list of indexed records
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [chainId, count, items]
+            properties:
+              chainId: { type: integer, const: 4153 }
+              count: { type: integer }
+              items: { type: array, items: {} }
+  schemas:
+    Address:
+      type: string
+      pattern: '^0x[a-fA-F0-9]{40}$'
+      example: '0x78d2e9D2B81D94ED27310d61e5f9e1C4db35fba5'
+    Hash:
+      type: string
+      pattern: '^0x[a-fA-F0-9]{64}$'
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        detail: { type: string }
+        requestId: { type: string }
+    Resolution:
+      type: object
+      required: [chainId, name, node, address, owner, resolver, expiry, blockNumber, source]
+      properties:
+        chainId: { type: integer, const: 4153 }
+        name: { type: string, example: example.rise }
+        node: { $ref: '#/components/schemas/Hash' }
+        address: { oneOf: [{ $ref: '#/components/schemas/Address' }, { type: 'null' }] }
+        owner: { $ref: '#/components/schemas/Address' }
+        resolver: { oneOf: [{ $ref: '#/components/schemas/Address' }, { type: 'null' }] }
+        expiry: { type: string, pattern: '^\d+$' }
+        blockNumber: { type: string, pattern: '^\d+$' }
+        source: { type: string, const: onchain }
+    ReverseResolution:
+      type: object
+      required: [chainId, address, primaryName]
+      properties:
+        chainId: { type: integer, const: 4153 }
+        address: { $ref: '#/components/schemas/Address' }
+        primaryName: { type: [string, 'null'] }
+        node: { type: [string, 'null'] }
+        resolvedAddress: { type: [string, 'null'] }
+        expiry: { type: [string, 'null'] }
+        isExpired: { type: [boolean, 'null'] }
+        lastIndexedBlock: { type: [string, 'null'] }
+        lastIndexedAt: { type: [string, 'null'] }
+    OnchainName:
+      type: object
+      required: [chainId, network, node, label, name, registered, available, policy, publicRegistrationAvailable, blockNumber, source]
+      properties:
+        chainId: { type: integer, const: 4153 }
+        network: { type: string, const: RISE Mainnet }
+        node: { $ref: '#/components/schemas/Hash' }
+        label: { type: string }
+        name: { type: string }
+        owner: { type: [string, 'null'] }
+        resolver: { type: [string, 'null'] }
+        resolvedAddress: { type: [string, 'null'] }
+        expiry: { type: string }
+        isExpired: { type: boolean }
+        registered: { type: boolean }
+        available: { type: boolean }
+        policy:
+          type: object
+          properties:
+            id: { type: integer, minimum: 0, maximum: 3 }
+            name: { type: string, enum: [open, protected, auction_only, fixed_premium, unknown] }
+        publicRegistrationAvailable: { type: boolean }
+        blockNumber: { type: string }
+        source: { type: string, const: onchain }
+    IndexedName:
+      type: object
+      additionalProperties: true
+    NameRecord:
+      allOf:
+        - $ref: '#/components/schemas/OnchainName'
+        - type: object
+          properties:
+            indexed: { oneOf: [{ $ref: '#/components/schemas/IndexedName' }, { type: 'null' }] }

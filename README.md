@@ -126,6 +126,12 @@ deduplication keys, explorer links, and message copy are mainnet-aware. The
 health endpoint reports whether these integrations are configured without
 returning their credentials.
 
+## Public `.rise` integration API
+
+The repository includes a separate GET-only RNS API, a private local RNS mirror, lightweight developer documentation, and the source for the `@stage0/rns` client package. This service is deployed independently from Senna so third-party name-resolution traffic cannot consume the chat API or production Supabase connection pool.
+
+See [docs/deployment/stage0-rns-public-api.md](docs/deployment/stage0-rns-public-api.md) for the topology, security model, endpoints, and DNS cutover procedure.
+
 ## Deployment Notes
 
 - Deploy this as its own API service/repo.
