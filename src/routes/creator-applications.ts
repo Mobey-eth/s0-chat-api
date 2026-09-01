@@ -13,6 +13,7 @@ import {
 import {
   consumeCreatorAdminChallenge,
   createCreatorAdminChallenge,
+  extendCreatorAdminSession,
   getCreatorAccess,
   getCreatorAdminChallenge,
   getCreatorAdminSession,
@@ -34,7 +35,7 @@ const HASH_RE = /^0x[a-fA-F0-9]{64}$/;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const CREATOR_ADMIN_COOKIE = "stage0_creator_admin_session";
 const ADMIN_CHALLENGE_TTL_MS = 5 * 60 * 1_000;
-const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
+const ADMIN_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 
 const optionalText = (max: number) => z.string().trim().max(max).transform((value) => value || null);
 const teamMemberSchema = z.object({
@@ -127,41 +128,51 @@ const approvalBodySchema = z.object({
   notes: z.string().trim().max(1000).nullable().optional(),
 });
 
-function creatorAdminCookie(request: FastifyRequest) {
+function creatorAdminCookies(request: FastifyRequest) {
   const header = request.headers.cookie;
-  if (!header) return null;
+  if (!header) return [];
+  const tokens: string[] = [];
   for (const entry of header.split(";")) {
     const separator = entry.indexOf("=");
     if (separator < 0 || entry.slice(0, separator).trim() !== CREATOR_ADMIN_COOKIE) continue;
     try {
-      return decodeURIComponent(entry.slice(separator + 1).trim());
+      const token = decodeURIComponent(entry.slice(separator + 1).trim());
+      if (token) tokens.push(token);
     } catch {
-      return null;
+      continue;
     }
   }
-  return null;
+  return tokens;
 }
 
-function creatorAdminCookieHeader(token: string, maxAgeSeconds: number) {
+function creatorAdminCookieHeader(token: string, maxAgeSeconds: number, path = "/api/admin") {
   const secure = config.nodeEnv === "production" ? "; Secure" : "";
-  return `${CREATOR_ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=/api/admin/creator; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}${secure}`;
+  return `${CREATOR_ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=${path}; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}${secure}`;
 }
 
 function creatorAdminTokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+async function findCreatorAdminSession(request: FastifyRequest, chainId: number) {
+  for (const token of creatorAdminCookies(request)) {
+    const session = await getCreatorAdminSession(creatorAdminTokenHash(token));
+    if (!session) continue;
+    if (session.chainId !== chainId || session.adminAddress !== config.creatorAdminAddress) continue;
+    return { token, session };
+  }
+  return null;
+}
+
 async function requireCreatorAdminSession(request: FastifyRequest, chainId: number) {
-  const token = creatorAdminCookie(request);
-  if (!token) return null;
-  const session = await getCreatorAdminSession(creatorAdminTokenHash(token));
-  if (!session) return null;
-  if (session.chainId !== chainId || session.adminAddress !== config.creatorAdminAddress) return null;
-  return session;
+  return (await findCreatorAdminSession(request, chainId))?.session ?? null;
 }
 
 function clearCreatorAdminCookie(reply: FastifyReply) {
-  reply.header("set-cookie", creatorAdminCookieHeader("", 0));
+  reply.header("set-cookie", [
+    creatorAdminCookieHeader("", 0),
+    creatorAdminCookieHeader("", 0, "/api/admin/creator"),
+  ]);
 }
 
 function getFieldValue(fields: MultipartFields, key: string): string {
@@ -361,6 +372,31 @@ export async function registerCreatorApplicationRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/api/admin/creator/session-upgrade", async (request, reply) => {
+    const matched = await findCreatorAdminSession(request, config.riseChainId);
+    if (!matched) {
+      clearCreatorAdminCookie(reply);
+      return reply.code(401).send({ error: "creator_admin_session_required" });
+    }
+
+    const renewedExpiresAt = await extendCreatorAdminSession(
+      creatorAdminTokenHash(matched.token),
+      new Date(Date.now() + ADMIN_SESSION_TTL_MS).toISOString(),
+    );
+    if (!renewedExpiresAt) {
+      clearCreatorAdminCookie(reply);
+      return reply.code(401).send({ error: "creator_admin_session_required" });
+    }
+    const maxAgeSeconds = Math.floor(ADMIN_SESSION_TTL_MS / 1_000);
+    return reply
+      .header("set-cookie", [
+        creatorAdminCookieHeader(matched.token, maxAgeSeconds),
+        creatorAdminCookieHeader("", 0, "/api/admin/creator"),
+      ])
+      .header("cache-control", "no-store")
+      .send({ ok: true, expiresAt: renewedExpiresAt });
+  });
+
   app.get("/api/admin/creator-session/challenge", async (request, reply) => {
     const parsed = adminSessionChallengeQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_admin_session_request" });
@@ -442,8 +478,9 @@ export async function registerCreatorApplicationRoutes(app: FastifyInstance) {
   });
 
   app.delete("/api/admin/creator-session", async (request, reply) => {
-    const token = creatorAdminCookie(request);
-    if (token) await revokeCreatorAdminSession(creatorAdminTokenHash(token));
+    await Promise.all(
+      creatorAdminCookies(request).map((token) => revokeCreatorAdminSession(creatorAdminTokenHash(token))),
+    );
     clearCreatorAdminCookie(reply);
     return reply.header("cache-control", "no-store").send({ ok: true });
   });

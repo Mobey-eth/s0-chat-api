@@ -1278,6 +1278,21 @@ export async function getCreatorAdminSession(tokenHash: string) {
   };
 }
 
+export async function extendCreatorAdminSession(tokenHash: string, expiresAt: string) {
+  const result = await pool.query<{ expires_at: Date }>(
+    `
+      update senna.creator_admin_sessions
+      set expires_at = greatest(expires_at, $2),
+          last_used_at = now()
+      where token_hash = $1 and expires_at > now()
+      returning expires_at
+    `,
+    [tokenHash, expiresAt],
+  );
+  const row = result.rows[0];
+  return row ? new Date(row.expires_at).toISOString() : null;
+}
+
 export async function revokeCreatorAdminSession(tokenHash: string) {
   await pool.query(
     `delete from senna.creator_admin_sessions where token_hash = $1`,
