@@ -132,4 +132,5 @@ test(".rise registration accepts only the requested name field", () => {
   assert.ok(draft);
   assert.equal(draft.prefill.name, "launch-day");
   assert.deepEqual(draft.missingFields, []);
+  assert.equal(draft.summary, 'Check availability and register "launch-day.rise".');
 });

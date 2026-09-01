@@ -830,12 +830,13 @@ export function buildBuyName(input: { name?: string }): ActionDraft {
     prefill: {
       name: input.name || "",
     },
-    summary: input.name ? `Register "${input.name}.rise" for 1 year.` : "Register a .rise name for 1 year.",
+    summary: input.name ? `Check availability and register "${input.name}.rise".` : "Check availability and register a .rise name.",
     warnings: [],
     missingFields: missing,
     nextSteps: [
-      "Approve the RNS registry once (if first time)",
-      "Sign the register transaction in your wallet",
+      "Confirm the name is available",
+      "Choose a registration period and review the price",
+      "Sign the registration transaction in your wallet",
     ],
   });
 }
@@ -1279,7 +1280,7 @@ export function getActionReadyReply(draft: ActionDraft) {
   if (draft.actionType === "create_token") return "Token is ready to sign. Take a look and sign below.";
   if (draft.actionType === "create_nft") return "NFT collection is ready. Review metadata and sale windows before signing.";
   if (draft.actionType === "airdrop_tokens") return "Airdrop is ready. Double-check recipients, then sign.";
-  if (draft.actionType === "buy_name") return "Name is ready to register. Sign below to claim it for 1 year.";
+  if (draft.actionType === "buy_name") return "Checking availability. Choose a registration period and review the price below.";
   if (draft.actionType === "create_presale") return "Presale setup is staged. Open it in Stage0 to finish.";
   if (draft.actionType === "open_launchpad") return "Opening the Stage0 launchpad.";
   if (draft.actionType === "open_dashboard") return "Opening your Stage0 dashboard.";
