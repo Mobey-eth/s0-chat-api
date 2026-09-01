@@ -612,6 +612,21 @@ export async function registerChatRoutes(app: FastifyInstance) {
       });
     }
 
+    // A draft that is already asking for a field owns the next valid answer. This must
+    // run before fresh intent detection, otherwise values such as `mobi.rise` are
+    // mistaken for a brand-new request and the user is asked to confirm twice.
+    const latestDraftRow = await getLatestActionDraft(sessionId);
+    if (latestDraftRow && latestDraftRow.missingFields.length > 0) {
+      const existing = actionDraftFromStored(latestDraftRow);
+      const continuedDraft = continueActionDraft(existing, latestUserMessage.content);
+      if (continuedDraft) {
+        await resetOffTopicStrikes(sessionId);
+        const isReady = continuedDraft.missingFields.length === 0;
+        const responseReply = isReady ? getActionReadyReply(continuedDraft) : getActionFollowUp(continuedDraft);
+        return persistAndRespondDraft({ sessionId, draft: continuedDraft, reply: responseReply, isReady });
+      }
+    }
+
     const pageOnlyAction = detectPageOnlyActionIntent(latestUserMessage.content);
     if (pageOnlyAction) {
       await resetOffTopicStrikes(sessionId);
@@ -678,14 +693,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
     }
 
     // --- Rule-based action classification ---
-    const latestDraftRow = await getLatestActionDraft(sessionId);
     let ruleAction: ActionDraft | null = null;
     let updatedCompletedDraft = false;
 
-    if (latestDraftRow && latestDraftRow.missingFields.length > 0) {
-      const existing = actionDraftFromStored(latestDraftRow);
-      ruleAction = continueActionDraft(existing, latestUserMessage.content);
-    } else if (latestDraftRow) {
+    if (latestDraftRow && latestDraftRow.missingFields.length === 0) {
       const existing = actionDraftFromStored(latestDraftRow);
       ruleAction = updateCompletedActionDraft(existing, latestUserMessage.content);
       updatedCompletedDraft = Boolean(ruleAction);

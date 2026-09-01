@@ -136,7 +136,7 @@ function parseQuantityFromText(text: string): string {
   return "";
 }
 
-function parseAmount(message: string) {
+function parseExplicitAmount(message: string) {
   const sanitized = message.replace(/\b0x[a-fA-F0-9]{40}\b/g, " ");
 
   const verbMatch = sanitized.match(/\b(?:lock|vest|airdrop|send|amount|supply|sell|mint)\s+([\d,]+(?:\.\d+)?(?:\s*[kmbt]\b|\s+(?:thousand|million|billion|trillion)s?\b)?)/i)?.[1];
@@ -151,7 +151,14 @@ function parseAmount(message: string) {
     if (result) return result;
   }
 
-  return parseQuantityFromText(sanitized);
+  return "";
+}
+
+function parseAmount(message: string) {
+  const explicit = parseExplicitAmount(message);
+  if (explicit) return explicit;
+
+  return parseQuantityFromText(message.replace(/\b0x[a-fA-F0-9]{40}\b/g, " "));
 }
 
 function parseWordNumber(message: string) {
@@ -181,14 +188,24 @@ function parseWordNumber(message: string) {
   return total > 0 ? String(total) : "";
 }
 
-function parseDays(message: string) {
+function parseExplicitDays(message: string) {
   const digitMatch =
     message.match(/(?:for\s+)?(\d{1,5})\s*days?/i)?.[1] ??
-    message.match(/^\s*(\d{1,5})\s*$/)?.[1];
+    message.match(/\bduration\s*(?:is|=|:|of)?\s*(\d{1,5})\b/i)?.[1];
   if (digitMatch) return digitMatch;
 
   const wordWithUnit = message.match(/(?:for\s+)?([a-z\s-]{2,30})\s+days?/i)?.[1];
   if (wordWithUnit) return parseWordNumber(wordWithUnit);
+
+  return "";
+}
+
+function parseDays(message: string) {
+  const explicit = parseExplicitDays(message);
+  if (explicit) return explicit;
+
+  const standalone = message.match(/^\s*(\d{1,5})\s*$/)?.[1];
+  if (standalone) return standalone;
 
   return parseWordNumber(message.trim());
 }
@@ -298,6 +315,24 @@ function parseDirectTokenNameAnswer(message: string) {
   return trimmed;
 }
 
+function parseDirectCollectionNameAnswer(message: string) {
+  const quoted = parseQuotedValue(message);
+  const trimmed = (quoted || message.trim()).replace(/\s+/g, " ").trim();
+  if (
+    trimmed.length < 2 ||
+    trimmed.length > 64 ||
+    !/^[A-Za-z0-9][A-Za-z0-9 &'._-]*$/.test(trimmed) ||
+    /^\d+$/.test(trimmed) ||
+    /^(?:yes|no|cancel|stop|skip|default|okay|ok)$/i.test(trimmed) ||
+    /\b(?:symbol|ticker|base\s*uri|metadata|image\s*uri|max\s*supply|mint\s*price|sale\s*(?:start|end))\b/i.test(trimmed) ||
+    /^(?:create|deploy|make|launch|mint)(?:\s+(?:a|an|new))?\s+(?:nft|collection|drop)$/i.test(trimmed)
+  ) {
+    return "";
+  }
+
+  return trimmed;
+}
+
 function parseCollectionName(message: string) {
   return parseNameAfterKind(message, "nft");
 }
@@ -371,11 +406,18 @@ function parseDecimals(message: string) {
   return "";
 }
 
-function parseUri(message: string, labels: RegExp[]) {
+function parseExplicitUri(message: string, labels: RegExp[]) {
   for (const label of labels) {
     const labeled = message.match(new RegExp(`${label.source}\\s*(?:is|=|:)?\\s*["']?([^"'\\s,]+)`, "i"))?.[1]?.trim();
     if (labeled) return labeled;
   }
+
+  return "";
+}
+
+function parseUri(message: string, labels: RegExp[]) {
+  const explicit = parseExplicitUri(message, labels);
+  if (explicit) return explicit;
 
   return (
     message.match(/\bipfs:\/\/[^\s"'<>]+/i)?.[0] ??
@@ -389,8 +431,16 @@ function parseBaseUri(message: string) {
   return parseUri(message, [/\bbase\s*uri\b/i, /\bmetadata\s*uri\b/i, /\bmetadata\b/i]);
 }
 
+function parseExplicitBaseUri(message: string) {
+  return parseExplicitUri(message, [/\bbase\s*uri\b/i, /\bmetadata\s*uri\b/i, /\bmetadata\b/i]);
+}
+
 function parseCollectionImageUri(message: string) {
   return parseUri(message, [/\bcollection\s*image\s*uri\b/i, /\bimage\s*uri\b/i, /\bcover\s*image\b/i, /\bcontract\s*uri\b/i]);
+}
+
+function parseExplicitCollectionImageUri(message: string) {
+  return parseExplicitUri(message, [/\bcollection\s*image\s*uri\b/i, /\bimage\s*uri\b/i, /\bcover\s*image\b/i, /\bcontract\s*uri\b/i]);
 }
 
 function parseMintPrice(message: string) {
@@ -398,6 +448,14 @@ function parseMintPrice(message: string) {
     message.match(/(?:price|mint price|cost)(?:\s+is)?\s+(\d+(?:\.\d+)?)\s*(?:eth)?/i)?.[1] ??
     message.match(/\b(\d+(?:\.\d+)?)\s*eth\b/i)?.[1];
   return match ?? "";
+}
+
+function parseDirectDecimalAmount(message: string) {
+  return message.trim().match(/^\d+(?:\.\d+)?$/)?.[0] ?? "";
+}
+
+function parseLabeledTokenAddress(message: string) {
+  return message.match(/\b(?:token|asset)(?:\s+(?:contract|address))?\s*(?:is|=|:)?\s*(0x[a-fA-F0-9]{40})\b/i)?.[1] ?? "";
 }
 
 function parseDateLike(message: string) {
@@ -870,32 +928,46 @@ function mergeCreateToken(existing: ActionDraft, message: string) {
 function mergeCreateNft(existing: ActionDraft, message: string) {
   const dateLike = parseDateLike(message);
   const firstMissing = existing.missingFields[0];
+  const explicitName = parseLabeledTextField(message, ["collection\\s+name", "nft\\s+name", "name"]) || parseNamedPhrase(message);
+  const directName = firstMissing === "name" ? parseDirectCollectionNameAnswer(message) : "";
+  const explicitSymbol = parseLabeledSymbolField(message);
+  const directSymbol = firstMissing === "symbol" ? parseTokenSymbol(message) : "";
+  const explicitBaseURI = parseExplicitBaseUri(message);
+  const explicitImageURI = parseExplicitCollectionImageUri(message);
+  const hasExplicitURI = Boolean(explicitBaseURI || explicitImageURI);
+  const directURI = hasExplicitURI ? "" : parseUri(message, []);
+  const explicitMaxSupply = parseExplicitSupply(message);
+  const directMaxSupply = firstMissing === "maxSupply" ? parseQuantityFromText(message) : "";
+  const explicitMintPrice = parseMintPrice(message);
+  const directMintPrice = firstMissing === "mintPrice" ? parseDirectDecimalAmount(message) : "";
 
   return buildCreateNft({
-    name: existing.prefill.name || parseCollectionName(message),
-    symbol: existing.prefill.symbol || parseTokenSymbol(message),
+    name: existing.prefill.name || explicitName || directName,
+    symbol: existing.prefill.symbol || explicitSymbol || directSymbol,
     standard: existing.prefill.mode || parseNftStandard(message) || "erc721",
-    baseURI: existing.prefill.baseURI || parseBaseUri(message),
-    collectionImageURI: existing.prefill.collectionImageURI || parseCollectionImageUri(message),
-    maxSupply: existing.prefill.maxSupply || parseSupply(message),
+    baseURI: existing.prefill.baseURI || explicitBaseURI || (firstMissing === "baseURI" ? directURI : ""),
+    collectionImageURI: existing.prefill.collectionImageURI || explicitImageURI || (firstMissing === "collectionImageURI" ? directURI : ""),
+    maxSupply: existing.prefill.maxSupply || explicitMaxSupply || directMaxSupply,
     walletLimit: existing.prefill.walletLimit || "",
     payoutWallet: existing.prefill.payoutWallet || parseTokenAddress(message),
-    mintPrice: existing.prefill.mintPrice || parseMintPrice(message),
+    mintPrice: existing.prefill.mintPrice || explicitMintPrice || directMintPrice,
     saleStart: existing.prefill.saleStart || (firstMissing === "saleStart" ? dateLike : ""),
     saleEnd: existing.prefill.saleEnd || (firstMissing === "saleEnd" ? dateLike : ""),
   });
 }
 
 function mergeLockToken(existing: ActionDraft, message: string) {
-  const parsedDuration = existing.prefill.duration || parseDays(message);
+  const firstMissing = existing.missingFields[0];
+  const parsedAmount = existing.prefill.amount || parseExplicitAmount(message) || (firstMissing === "amount" ? parseAmount(message) : "");
+  const parsedDuration = existing.prefill.duration || parseExplicitDays(message) || (firstMissing === "durationDays" ? parseDays(message) : "");
   const parsedName =
     existing.prefill.name ||
     parseExplicitLockName(message) ||
-    (existing.missingFields[0] === "lockName" ? parseLooseShortText(message) : "");
+    (firstMissing === "lockName" ? parseLooseShortText(message) : "");
 
   return buildLockToken({
     tokenAddress: existing.prefill.token || parseTokenAddress(message),
-    amount: existing.prefill.amount || parseAmount(message),
+    amount: parsedAmount,
     durationDays: parsedDuration,
     name: parsedName,
     description: existing.prefill.description || parsedName,
@@ -903,10 +975,25 @@ function mergeLockToken(existing: ActionDraft, message: string) {
 }
 
 function mergeAirdrop(existing: ActionDraft, message: string) {
+  const firstMissing = existing.missingFields[0];
   const isNative = existing.prefill.nativeToken === "true" || /\bnative\b|\beth\b/i.test(message);
+  const recipientsData = existing.prefill.recipientsData || parseRecipientEntries(message);
+  const recipientAddresses = new Set(
+    recipientsData
+      .split("\n")
+      .map((entry) => entry.split(",")[0]?.toLowerCase())
+      .filter(Boolean),
+  );
+  const explicitToken = parseLabeledTokenAddress(message);
+  const directToken = firstMissing === "tokenAddress"
+    ? [...message.matchAll(/\b0x[a-fA-F0-9]{40}\b/g)]
+        .map((match) => match[0])
+        .find((address) => !recipientAddresses.has(address.toLowerCase())) ?? ""
+    : "";
+
   return buildAirdrop({
-    tokenAddress: existing.prefill.token || (isNative ? "" : parseTokenAddress(message)),
-    recipientsData: existing.prefill.recipientsData || parseRecipientEntries(message),
+    tokenAddress: existing.prefill.token || (isNative ? "" : explicitToken || directToken),
+    recipientsData,
     nativeToken: isNative ? "true" : existing.prefill.nativeToken,
   });
 }
@@ -1066,12 +1153,10 @@ export function canContinueActionDraft(existing: ActionDraft, message: string) {
 
   // Order-agnostic: any parser that lands a value, anywhere, can advance the draft.
   if (existing.actionType === "lock_token") {
+    const merged = mergeLockToken(existing, message);
     return (
-      Boolean(parseTokenAddress(message)) ||
-      Boolean(parseAmount(message)) ||
-      Boolean(parseDays(message)) ||
-      Boolean(parseExplicitLockName(message)) ||
-      (existing.missingFields[0] === "lockName" && Boolean(parseLooseShortText(message)))
+      JSON.stringify(merged.prefill) !== JSON.stringify(existing.prefill) ||
+      JSON.stringify(merged.missingFields) !== JSON.stringify(existing.missingFields)
     );
   }
 
@@ -1084,22 +1169,18 @@ export function canContinueActionDraft(existing: ActionDraft, message: string) {
   }
 
   if (existing.actionType === "create_nft") {
+    const merged = mergeCreateNft(existing, message);
     return (
-      Boolean(parseCollectionName(message)) ||
-      Boolean(parseTokenSymbol(message)) ||
-      Boolean(parseBaseUri(message) || parseUri(message, [])) ||
-      Boolean(parseCollectionImageUri(message) || parseUri(message, [])) ||
-      Boolean(parseSupply(message)) ||
-      Boolean(parseMintPrice(message)) ||
-      Boolean(parseDateLike(message))
+      JSON.stringify(merged.prefill) !== JSON.stringify(existing.prefill) ||
+      JSON.stringify(merged.missingFields) !== JSON.stringify(existing.missingFields)
     );
   }
 
   if (existing.actionType === "airdrop_tokens") {
+    const merged = mergeAirdrop(existing, message);
     return (
-      Boolean(parseTokenAddress(message)) ||
-      Boolean(parseRecipientEntries(message)) ||
-      /\bnative\b|\beth\b/i.test(message)
+      JSON.stringify(merged.prefill) !== JSON.stringify(existing.prefill) ||
+      JSON.stringify(merged.missingFields) !== JSON.stringify(existing.missingFields)
     );
   }
 
@@ -1168,7 +1249,11 @@ export function getActionFollowUp(draft: ActionDraft) {
 
   if (draft.actionType === "create_nft") {
     if (draft.missingFields.includes("name")) return "What should the NFT collection be called?";
-    if (draft.missingFields.includes("symbol")) return "What collection symbol?";
+    if (draft.missingFields.includes("symbol")) {
+      return draft.prefill.name
+        ? `What symbol should "${draft.prefill.name}" use?`
+        : "What collection symbol should it use?";
+    }
     if (draft.missingFields.includes("baseURI")) return "What's the base URI for metadata? (CID, ipfs://, or https:// works.)";
     if (draft.missingFields.includes("collectionImageURI")) return "What's the collection image URI?";
     if (draft.missingFields.includes("maxSupply")) return "Max supply?";
@@ -1316,6 +1401,10 @@ export function suggestForDraftField(draft: ActionDraft): string[] {
     if (first === "tokenType") return ["Plain", "Mintable", "Burnable"];
     if (first === "decimals") return ["18", "9", "6"];
     if (first === "initialSupply") return ["1,000,000", "100,000,000", "1,000,000,000"];
+  }
+
+  if (draft.actionType === "create_nft" && first === "symbol") {
+    return suggestTokenSymbols(draft.prefill.name);
   }
 
   if (draft.actionType === "lock_token") {
