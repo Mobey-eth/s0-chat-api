@@ -4,27 +4,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Integrate .rise names across RISE Mainnet with the Stage0 RNS API and onchain contracts.">
+    <meta name="theme-color" content="#36DF83">
     <title>Stage0 RNS Developers</title>
+    <link rel="icon" type="image/png" href="/stage0-favicon.png">
+    <link rel="apple-touch-icon" href="/stage0-favicon.png">
     <link rel="stylesheet" href="/styles.css">
     <script src="/app.js" defer></script>
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="#top" aria-label="Stage0 RNS developer home">
-        <span class="brand-mark">S0</span>
-        <span>Stage0 <b>Developers</b></span>
+      <a class="brand" href="https://stage0.xyz" aria-label="Stage0 home">
+        <img src="/stage0-wordmark.png" alt="STAGE0">
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="brand-context">Developers</span>
       </a>
-      <nav aria-label="Primary navigation">
-        <a href="#quickstart">Quickstart</a>
-        <a href="#endpoints">API</a>
-        <a href="#onchain">Onchain</a>
-        <a href="/openapi.yaml">OpenAPI</a>
-      </nav>
+      <div class="topbar-actions">
+        <span class="network-badge">
+          <img src="/rise-network.png" alt="">
+          <span>RISE Mainnet</span>
+        </span>
+        <nav aria-label="Primary navigation">
+          <a href="#quickstart">Quickstart</a>
+          <a href="#endpoints">API</a>
+          <a href="#onchain">Onchain</a>
+          <a href="/openapi.yaml">OpenAPI</a>
+        </nav>
+      </div>
     </header>
 
     <main id="top">
       <section class="hero shell">
-        <div class="eyebrow"><span></span> RISE Mainnet · Chain 4153</div>
+        <div class="eyebrow"><img src="/rise-network.png" alt="RISE"> RISE Mainnet · Chain 4153</div>
         <h1>RISE names,<br><em>everywhere.</em></h1>
         <p>
           Resolve <code>.rise</code> names, display wallet identities, and read the RNS marketplace
@@ -36,7 +46,7 @@
         </div>
         <dl class="facts">
           <div><dt>API</dt><dd>https://rns.stage0.xyz/v1</dd></div>
-          <div><dt>Network</dt><dd>RISE Mainnet</dd></div>
+          <div><dt>Network</dt><dd class="network-inline"><img src="/rise-network.png" alt="">RISE Mainnet</dd></div>
           <div><dt>Access</dt><dd>Public · GET only</dd></div>
         </dl>
       </section>

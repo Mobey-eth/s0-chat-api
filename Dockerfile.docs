@@ -5,5 +5,8 @@ COPY developer-docs/index.html /usr/share/nginx/html/index.html
 COPY developer-docs/styles.css /usr/share/nginx/html/styles.css
 COPY developer-docs/app.js /usr/share/nginx/html/app.js
 COPY developer-docs/openapi.yaml /usr/share/nginx/html/openapi.yaml
+COPY developer-docs/stage0-wordmark.png /usr/share/nginx/html/stage0-wordmark.png
+COPY developer-docs/stage0-favicon.png /usr/share/nginx/html/stage0-favicon.png
+COPY developer-docs/rise-network.png /usr/share/nginx/html/rise-network.png
 
 EXPOSE 80
