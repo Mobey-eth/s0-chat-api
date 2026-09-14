@@ -49,6 +49,23 @@ test("confirmation language cannot become an action name", () => {
   assert.equal(continueActionDraft(nftDraft, "go ahead"), null);
 });
 
+test("token creation requests cannot become the token name", () => {
+  const tokenDraft = startQuickAction("create_token");
+  assert.ok(tokenDraft);
+
+  for (const request of [
+    "Create a token",
+    "I want to create a token",
+    "I'd like to create a token",
+    "Can you make a new ERC-20 token for me?",
+    "Please deploy a token",
+  ]) {
+    const next = continueActionDraft(tokenDraft, request);
+    assert.equal(next?.prefill.name ?? tokenDraft.prefill.name, "", request);
+    assert.equal(next?.missingFields[0] ?? tokenDraft.missingFields[0], "name", request);
+  }
+});
+
 test("a standalone supply does not also populate decimals", () => {
   let draft = continueTokenDraft("Eighteen Token");
   draft = continueTokenDraft("EGTN", draft);

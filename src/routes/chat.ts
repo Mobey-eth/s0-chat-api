@@ -549,7 +549,11 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
       const blank = startQuickAction(input.quickAction);
       if (blank) {
-        const merged = continueActionDraft(blank, latestUserMessage.content) ?? blank;
+        // A quick-action prompt identifies the flow; it is not an answer to the
+        // first field. Only merge it when the caller included real field data.
+        const merged = seedHasExplicitQuickActionDetails(input.quickAction, latestUserMessage.content)
+          ? continueActionDraft(blank, latestUserMessage.content) ?? blank
+          : blank;
         const isReady = merged.missingFields.length === 0;
         const reply = isReady ? getActionReadyReply(merged) : getActionFollowUp(merged);
         return persistAndRespondDraft({ sessionId, draft: merged, reply, isReady });

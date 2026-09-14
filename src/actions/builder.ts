@@ -307,7 +307,7 @@ function parseDirectTokenNameAnswer(message: string) {
     /^0x[a-fA-F0-9]{40}$/.test(trimmed) ||
     /^(?:yes|no|cancel|stop|skip|default|okay|ok|start(?: it)?|go ahead|do it)$/i.test(trimmed) ||
     /\b(?:symbol|ticker|supply|amount|decimals?|token\s*type|mintable|burnable|taxable|non[-\s]?mintable|fixed\s+supply)\b/i.test(trimmed) ||
-    /^(?:create|deploy|make|launch)(?:\s+(?:a|an|new))?\s+(?:erc[-\s]?20\s+)?token$/i.test(trimmed)
+    /^(?:(?:i\s+(?:want|need|would\s+like|wanna)\s+to|i'?d\s+like\s+to|let'?s|please|can\s+you|could\s+you|help\s+me)\s+)?(?:create|deploy|make|launch)(?:\s+me)?(?:\s+(?:a|an|new))?\s+(?:erc[-\s]?20\s+)?token(?:\s+(?:for\s+me|please))?$/i.test(trimmed)
   ) {
     return "";
   }
@@ -1225,27 +1225,25 @@ export function getActionFollowUp(draft: ActionDraft) {
   }
 
   if (draft.actionType === "create_token") {
-    if (draft.missingFields.includes("name")) return "What should the token be called?";
+    if (draft.missingFields.includes("name")) return "What would you like to call your token?";
     if (draft.missingFields.includes("symbol")) {
       return draft.prefill.name
-        ? `What ticker should "${draft.prefill.name}" use?`
-        : "What ticker symbol should the token use?";
+        ? `What ticker should we use for "${draft.prefill.name}"? Type your own, or choose a suggestion below.`
+        : "What ticker should we use? Type your own, or choose a suggestion below.";
     }
     if (draft.missingFields.includes("tokenType")) {
       return [
-        "What type of token?",
+        "How should the token work? Type an option, or choose one below.",
         "",
         "- Plain: standard fixed supply",
         "- Mintable: owner can mint more later",
         "- Burnable: holders can burn",
         "- Taxable: auto-tax on transfers",
         "- Non-mintable: fixed cap, no future mint",
-        "",
-        "If unsure, say plain.",
       ].join("\n");
     }
-    if (draft.missingFields.includes("initialSupply")) return "What initial supply? You can say a number or '1 million'.";
-    if (draft.missingFields.includes("decimals")) return "How many decimals? 18 is standard; say 'default' to use that.";
+    if (draft.missingFields.includes("initialSupply")) return "How many tokens should be created initially? For example, 1 million or 100,000,000.";
+    if (draft.missingFields.includes("decimals")) return "How many decimals should it use? 18 is standard, so you can also say default.";
   }
 
   if (draft.actionType === "create_nft") {
@@ -1277,7 +1275,7 @@ export function getActionFollowUp(draft: ActionDraft) {
 
 export function getActionReadyReply(draft: ActionDraft) {
   if (draft.actionType === "lock_token") return "Lock is ready to sign. Review the details and sign in the chat.";
-  if (draft.actionType === "create_token") return "Token is ready to sign. Take a look and sign below.";
+  if (draft.actionType === "create_token") return "Everything looks ready. Review the token details below, then sign when you're happy with them.";
   if (draft.actionType === "create_nft") return "NFT collection is ready. Review metadata and sale windows before signing.";
   if (draft.actionType === "airdrop_tokens") return "Airdrop is ready. Double-check recipients, then sign.";
   if (draft.actionType === "buy_name") return "Checking availability. Choose a registration period and review the price below.";
