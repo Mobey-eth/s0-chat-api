@@ -103,3 +103,23 @@ test("GET list endpoints return a stable envelope", async () => {
   assert.equal(invalidLimit.statusCode, 400);
   assert.equal(invalidLimit.json().error, "invalid_query");
 });
+
+test("shared primary choices retain the existing reverse URL and response envelope", async () => {
+  const record = {
+    chainId: 4153, address: onchainRecord.owner, primaryName: "alice.rise",
+    node: onchainRecord.node, resolvedAddress: onchainRecord.owner,
+    expiry: "9999999999", isExpired: false, lastIndexedBlock: "30000000",
+    lastIndexedAt: "2026-09-15T00:00:00.000Z",
+  };
+  const app = await buildPublicRnsApp(dependencies({ reverse: async () => record } as unknown as Partial<PublicRnsV1Dependencies>));
+  const response = await app.inject({ url: `/v1/reverse/${onchainRecord.owner}` });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), record);
+  const update = await app.inject({ method: "POST", url: "/api/rns/primary", payload: {} });
+  assert.equal(update.statusCode, 404);
+  const publicUpdate = await app.inject({ method: "POST", url: `/v1/reverse/${onchainRecord.owner}`, payload: {} });
+  assert.equal(publicUpdate.statusCode, 405);
+  const authorization = await app.inject({ url: "/api/rns/primary/authorization" });
+  assert.equal(authorization.statusCode, 404);
+  await app.close();
+});

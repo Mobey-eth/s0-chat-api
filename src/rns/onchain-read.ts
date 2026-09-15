@@ -34,38 +34,44 @@ export async function readRnsNameOnchain(name: string) {
 
   const fqdn = `${label}.rise`;
   const node = namehash(fqdn);
-  const [ownerRaw, resolverRaw, expiry, available, policyRaw, blockNumber] = await Promise.all([
+  // Keep ownership, resolver, expiry and the reported head in one snapshot.
+  const blockNumber = await client.getBlockNumber({ cacheTime: 0 });
+  const [ownerRaw, resolverRaw, expiry, available, policyRaw] = await Promise.all([
     client.readContract({
       address: config.rnsContracts.registry as `0x${string}`,
       abi: registryAbi,
       functionName: "owner",
       args: [node],
+      blockNumber,
     }),
     client.readContract({
       address: config.rnsContracts.registry as `0x${string}`,
       abi: registryAbi,
       functionName: "resolver",
       args: [node],
+      blockNumber,
     }),
     client.readContract({
       address: config.rnsContracts.registrar as `0x${string}`,
       abi: registrarAbi,
       functionName: "expiryOf",
       args: [label],
+      blockNumber,
     }),
     client.readContract({
       address: config.rnsContracts.registrar as `0x${string}`,
       abi: registrarAbi,
       functionName: "available",
       args: [label],
+      blockNumber,
     }),
     client.readContract({
       address: config.rnsContracts.registrar as `0x${string}`,
       abi: registrarAbi,
       functionName: "effectivePolicy",
       args: [label],
+      blockNumber,
     }),
-    client.getBlockNumber(),
   ]);
 
   const owner = normalizedAddress(ownerRaw);
@@ -78,6 +84,7 @@ export async function readRnsNameOnchain(name: string) {
         abi: resolverAbi,
         functionName: "addr",
         args: [node],
+        blockNumber,
       }));
     } catch {
       resolvedAddress = null;

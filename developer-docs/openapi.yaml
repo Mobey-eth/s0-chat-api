@@ -48,7 +48,7 @@ paths:
         - $ref: '#/components/parameters/Address'
       responses:
         '200':
-          description: Indexed reverse resolution; primaryName is null when none is configured
+          description: Indexed reverse resolution. Honors a valid wallet-verified Stage0 preference, otherwise returns an unexpired owned name that resolves to the address. primaryName is null when none qualifies. Preferences are API metadata, not onchain reverse records. Mirror and HTTP caching apply.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReverseResolution' }

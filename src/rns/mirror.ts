@@ -34,6 +34,7 @@ const mirrorPool = new Pool({
 const MIRRORED_TABLES = [
   "sync_state",
   "names",
+  "primary_name_preferences",
   "primary_auctions",
   "marketplace_listings",
   "marketplace_auctions",

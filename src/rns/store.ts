@@ -839,6 +839,12 @@ export async function applyRnsOwnerTransfer(
     `,
     [input.chainId, input.node, ZERO_ADDRESS, input.owner, input.blockNumber.toString()],
   );
+  await db.query(`
+    update stage0_rns.primary_name_preferences
+    set invalidated_at = now(), version = version + 1, updated_at = now()
+    where chain_id = $1 and node = lower($2) and address <> lower($3)
+      and invalidated_at is null and selected_block < $4
+  `, [input.chainId, input.node, input.owner, input.blockNumber.toString()]);
 }
 
 export async function applyRnsResolverUpdate(
@@ -1480,7 +1486,12 @@ export async function getRnsPrimaryNameForAddress(input: {
         and released_at is null
         and expiry > $3
         and registered_block >= $4
-      order by length(label) asc nulls last, expiry desc, label asc nulls last, node asc
+      order by exists (
+        select 1 from stage0_rns.primary_name_preferences p
+        where p.chain_id = stage0_rns.names.chain_id and p.address = lower($2)
+          and p.node = stage0_rns.names.node and p.invalidated_at is null
+          and p.registered_block = stage0_rns.names.registered_block
+      ) desc, length(label) asc nulls last, expiry desc, label asc nulls last, node asc
       limit 1
     `,
     [input.chainId, input.address, input.nowUnix.toString(), input.minRegisteredBlock.toString()],

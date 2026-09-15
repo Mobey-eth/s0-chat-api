@@ -1,4 +1,5 @@
 FROM postgres:16-alpine
 
 COPY rns-mirror/01-schema.sql /docker-entrypoint-initdb.d/01-schema.sql
+COPY sql/019_rns_primary_name_preferences.sql /docker-entrypoint-initdb.d/02-primary-preferences.sql
 COPY rns-mirror/provision-reader.sh /usr/local/bin/provision-rns-reader

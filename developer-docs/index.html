@@ -78,7 +78,7 @@
         </div>
         <div class="endpoint-list">
           <article><b>GET</b><code>/v1/resolve/{name}</code><p>Resolve a registered name directly from RISE Mainnet.</p></article>
-          <article><b>GET</b><code>/v1/reverse/{address}</code><p>Find the indexed primary name for an address.</p></article>
+          <article><b>GET</b><code>/v1/reverse/{address}</code><p>Find an address’s primary name. Honors wallet-verified choices made on Stage0, then falls back to an owned name that resolves to the address.</p></article>
           <article><b>GET</b><code>/v1/names/{name}</code><p>Read onchain state together with indexed registration metadata.</p></article>
           <article><b>GET</b><code>/v1/addresses/{address}/names</code><p>List active names owned by an address, including marketplace custody.</p></article>
           <article><b>GET</b><code>/v1/availability/{name}</code><p>Check availability and the registrar's effective policy.</p></article>
