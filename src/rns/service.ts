@@ -1,5 +1,6 @@
 import { createPublicClient, decodeFunctionData, getAddress, http, parseAbi, parseAbiItem } from "viem";
 import { namehash } from "viem/ens";
+import { recordRegistryTransfer, REGISTRY_TRANSFER_EVENT } from "./incoming-transfers.js";
 import { pool } from "../db.js";
 import { logger } from "../logger.js";
 import { config } from "../config.js";
@@ -84,7 +85,7 @@ const registrarEvents = {
 } as const;
 
 const registryEvents = {
-  transfer: parseAbiItem("event Transfer(bytes32 indexed node, address owner)"),
+  transfer: REGISTRY_TRANSFER_EVENT,
   newResolver: parseAbiItem("event NewResolver(bytes32 indexed node, address resolver)"),
 } as const;
 
@@ -822,6 +823,10 @@ async function syncRegistryRange(fromBlock: bigint, toBlock: bigint) {
           owner: owner as `0x${string}`,
           blockNumber: log.blockNumber,
         });
+        if (log.transactionHash && log.logIndex !== null && !log.removed) {
+          await recordRegistryTransfer(db, { chainId: config.riseChainId, registry: config.rnsContracts.registry,
+            node, recipient: owner, transactionHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber });
+        }
         continue;
       }
 

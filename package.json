@@ -7,6 +7,8 @@
     "dev": "tsx src/server.ts",
     "test": "tsx --test src/**/*.test.ts",
     "test:rns-primary:db": "tsx --test src/rns/primary-name.integration.ts",
+    "test:rns-incoming:db": "tsx --test src/rns/incoming-transfers.integration.ts",
+    "rns:backfill-transfers:prod": "node dist/rns/backfill-transfers.js",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "start:rns-public": "node dist/public-rns-server.js",

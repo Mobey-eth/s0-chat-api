@@ -4,6 +4,7 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { takeRateLimit } from "../db.js";
 import { listRnsReservedNames } from "../rns/store.js";
+import { registerRnsIncomingRoutes } from "./rns-incoming.js";
 import {
   getRnsIndexHealth,
   listRnsMarketplaceActivity,
@@ -136,6 +137,8 @@ export async function registerPublicRnsRoutes(app: FastifyInstance) {
     const status = await getRnsIndexHealth();
     return reply.send(status);
   });
+
+  await registerRnsIncomingRoutes(app);
 
   app.get("/api/public/rns/resolve/name/:fqdn", async (request, reply) => {
     const parsedParams = nameParamsSchema.safeParse(request.params);
